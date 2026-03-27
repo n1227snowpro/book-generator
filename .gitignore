@@ -1,0 +1,8 @@
+# Server config (contains API keys — never commit)
+config.php
+
+# Generated temp files
+*.tmp
+
+# macOS
+.DS_Store
