@@ -104,26 +104,32 @@ def register_fonts(fonts_dir: str | None = None) -> tuple[str, str, str, str]:
         pdfmetrics.registerFont(TTFont("Aldrich",       str(aldrich_path)))
         pdfmetrics.registerFont(TTFont("Alegreya",      str(alegreya_path)))
         pdfmetrics.registerFont(TTFont("EBGaramond",    str(ebg_path)))
+        italic_body = "EBGaramond-Italic" if ebg_italic_path else "EBGaramond"
+        bold_body   = "EBGaramond-Bold"   if ebg_bold_path   else "EBGaramond"
         if ebg_italic_path:
             pdfmetrics.registerFont(TTFont("EBGaramond-Italic", str(ebg_italic_path)))
-            italic_body = "EBGaramond-Italic"
-        else:
-            italic_body = "EBGaramond"
         if ebg_bold_path:
             pdfmetrics.registerFont(TTFont("EBGaramond-Bold", str(ebg_bold_path)))
-            bold_body = "EBGaramond-Bold"
-        else:
-            bold_body = "EBGaramond"
+        # Register font family so <b> and <i> markup tags resolve correctly
+        pdfmetrics.registerFontFamily(
+            "EBGaramond",
+            normal=     "EBGaramond",
+            bold=        bold_body,
+            italic=      italic_body,
+            boldItalic=  bold_body,
+        )
         return "EBGaramond", "Alegreya", "Aldrich", italic_body, bold_body
 
     if aldrich_path and alegreya_path:
         pdfmetrics.registerFont(TTFont("Aldrich",  str(aldrich_path)))
         pdfmetrics.registerFont(TTFont("Alegreya", str(alegreya_path)))
+        italic_body = "Alegreya-Italic" if alegreya_italic_path else "Alegreya"
         if alegreya_italic_path:
             pdfmetrics.registerFont(TTFont("Alegreya-Italic", str(alegreya_italic_path)))
-            italic_body = "Alegreya-Italic"
-        else:
-            italic_body = "Alegreya"
+        pdfmetrics.registerFontFamily(
+            "Alegreya",
+            normal="Alegreya", bold="Alegreya", italic=italic_body, boldItalic=italic_body,
+        )
         return "Alegreya", "Alegreya", "Aldrich", italic_body, "Alegreya"
 
     # Fall back to system Times New Roman TTF (embeds correctly for KDP).
@@ -147,6 +153,10 @@ def register_fonts(fonts_dir: str | None = None) -> tuple[str, str, str, str]:
         pdfmetrics.registerFont(TTFont("TimesNR",        str(tnr)))
         pdfmetrics.registerFont(TTFont("TimesNR-Italic", str(tnr_italic)))
         pdfmetrics.registerFont(TTFont("TimesNR-Bold",   str(tnr_bold)))
+        pdfmetrics.registerFontFamily(
+            "TimesNR",
+            normal="TimesNR", bold="TimesNR-Bold", italic="TimesNR-Italic", boldItalic="TimesNR-Italic",
+        )
         print(f"  i  Custom fonts not found in {fdir} — using Times New Roman TTF fallback")
         return "TimesNR", "TimesNR-Bold", "TimesNR", "TimesNR-Italic", "TimesNR-Bold"
 
