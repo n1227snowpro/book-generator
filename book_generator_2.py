@@ -249,15 +249,14 @@ def _expand_para(para) -> list[dict]:
     if current:
         segments.append(current)
 
-    results = []
+    raw = []
     for seg in segments:
         text = ''.join(t for t, b, it in seg).strip()
         if not text:
             continue
-        # Strip leading * (markdown italic marker used by some n8n outputs)
         raw_italic = False
         if text.startswith('*'):
-            text = text.lstrip('*').strip()
+            text = text.lstrip('*').rstrip('*').strip()
             raw_italic = True
         total_chars  = sum(len(t) for t, b, it in seg if t.strip())
         italic_chars = sum(len(t) for t, b, it in seg if it is True and t.strip())
@@ -265,7 +264,19 @@ def _expand_para(para) -> list[dict]:
         italic = raw_italic or (total_chars > 0 and italic_chars / total_chars > 0.5)
         bold   = total_chars > 0 and bold_chars / total_chars > 0.5
         subheading = bold or bool(text and _SUBHEAD_LABELS.match(text))
-        results.append({"text": text, "italic": italic, "bold": bold, "subheading": subheading})
+        raw.append({"text": text, "italic": italic, "bold": bold, "subheading": subheading})
+
+    # Merge consecutive segments with the same formatting so multi-line verses
+    # (e.g. poetry split by \n) become one paragraph with <br/> line breaks
+    results = []
+    for item in raw:
+        if (results
+                and results[-1]["italic"]     == item["italic"]
+                and results[-1]["bold"]       == item["bold"]
+                and results[-1]["subheading"] == item["subheading"]):
+            results[-1]["text"] += "\n" + item["text"]
+        else:
+            results.append(item)
 
     return results if results else [_para_info(para)]
 
@@ -294,6 +305,10 @@ def extract_chapters(doc: DocxDocument) -> list[dict]:
 def _xe(t: str) -> str:
     return (t.replace("&","&amp;").replace("<","&lt;")
              .replace(">","&gt;").replace('"',"&quot;"))
+
+def _xe_br(t: str) -> str:
+    """Escape XML and convert newlines to <br/> for multi-line verses."""
+    return _xe(t).replace("\n", "<br/>")
 
 
 # Short standalone labels used as in-chapter section headers (text-based detection)
@@ -628,7 +643,7 @@ def build_epub(
         fname = f"{uuid.uuid4().hex[:16]}.xhtml"
         para_parts = []
         for p in ch["paragraphs"]:
-            t = _xe(p["text"])
+            t = _xe_br(p["text"])
             if p["subheading"]:
                 para_parts.append(f'<h3>{t}</h3>\n')
             elif p["italic"] and p["bold"]:
@@ -1020,7 +1035,7 @@ def build_paperback_pdf(
             story.append(ChapterAnchor(ch["title"]))
             story += _chapter_header(ch["title"])
             for p in ch["paragraphs"]:
-                t = _xe(p["text"])
+                t = _xe_br(p["text"])
                 if p["subheading"]:
                     story.append(Paragraph(t, s_subhead))
                 elif p["italic"]:
@@ -1058,7 +1073,7 @@ def build_paperback_pdf(
         for ch in chapters:
             story += _chapter_header(ch["title"])
             for p in ch["paragraphs"]:
-                t = _xe(p["text"])
+                t = _xe_br(p["text"])
                 if p["subheading"]:
                     story.append(Paragraph(t, s_subhead))
                 elif p["italic"]:
