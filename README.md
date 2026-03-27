@@ -305,3 +305,4 @@ book-generator/
 ## License
 
 MIT — free to use, modify, and deploy.
+# Auto-deploy active
