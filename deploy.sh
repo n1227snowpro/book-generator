@@ -71,12 +71,18 @@ info "Installing Python packages..."
 PYTHON=$(command -v python3)
 PY_VER=$($PYTHON -c "import sys; print(sys.version_info.minor)")
 
-$PYTHON -m pip install --quiet python-docx lxml defusedxml requests gdown
+# PEP 668: newer distros (Python 3.11+) mark system Python as externally managed
+PIP_FLAGS="--quiet"
+if $PYTHON -m pip install --quiet --dry-run pip 2>&1 | grep -q "externally-managed"; then
+    PIP_FLAGS="--quiet --break-system-packages"
+fi
+
+$PYTHON -m pip install $PIP_FLAGS python-docx lxml defusedxml requests gdown
 
 if [ "$PY_VER" -le 8 ]; then
-    $PYTHON -m pip install --quiet "reportlab==3.6.13"
+    $PYTHON -m pip install $PIP_FLAGS "reportlab==3.6.13"
 else
-    $PYTHON -m pip install --quiet reportlab
+    $PYTHON -m pip install $PIP_FLAGS reportlab
 fi
 success "Python packages installed"
 
@@ -98,11 +104,11 @@ download_font() {
     fi
 }
 
-download_font "EBGaramond-Regular.ttf" "ofl/ebgaramond/EBGaramond-Regular.ttf"
-download_font "EBGaramond-Italic.ttf"  "ofl/ebgaramond/EBGaramond-Italic.ttf"
-download_font "EBGaramond-Bold.ttf"    "ofl/ebgaramond/EBGaramond-Bold.ttf"
-download_font "Alegreya-Regular.ttf"   "ofl/alegreya/Alegreya-Regular.ttf"
-download_font "Alegreya-Italic.ttf"    "ofl/alegreya/Alegreya-Italic.ttf"
+download_font "EBGaramond-Regular.ttf" "ofl/ebgaramond/static/EBGaramond-Regular.ttf"
+download_font "EBGaramond-Italic.ttf"  "ofl/ebgaramond/static/EBGaramond-Italic.ttf"
+download_font "EBGaramond-Bold.ttf"    "ofl/ebgaramond/static/EBGaramond-Bold.ttf"
+download_font "Alegreya-Regular.ttf"   "ofl/alegreya/static/Alegreya-Regular.ttf"
+download_font "Alegreya-Italic.ttf"    "ofl/alegreya/static/Alegreya-Italic.ttf"
 download_font "Aldrich-Regular.ttf"    "ofl/aldrich/Aldrich-Regular.ttf"
 
 success "Fonts ready in $FONT_DIR"
