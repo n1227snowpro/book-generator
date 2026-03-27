@@ -258,13 +258,22 @@ def _expand_para(para) -> list[dict]:
         if text.startswith('*'):
             text = text.lstrip('*').rstrip('*').strip()
             raw_italic = True
+            seg = [(t, b, True) for t, b, it in seg]
         total_chars  = sum(len(t) for t, b, it in seg if t.strip())
         italic_chars = sum(len(t) for t, b, it in seg if it is True and t.strip())
         bold_chars   = sum(len(t) for t, b, it in seg if b  is True and t.strip())
         italic = raw_italic or (total_chars > 0 and italic_chars / total_chars > 0.5)
         bold   = total_chars > 0 and bold_chars / total_chars > 0.5
         subheading = bold or bool(text and _SUBHEAD_LABELS.match(text))
-        raw.append({"text": text, "italic": italic, "bold": bold, "subheading": subheading})
+        # Build inline markup for body paragraphs to preserve per-run bold within a line
+        inline_parts = []
+        for chunk, b, it in seg:
+            esc = chunk.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+            if b and not italic:   # don't add <b> inside an all-italic paragraph
+                esc = f"<b>{esc}</b>"
+            inline_parts.append(esc)
+        markup = "".join(inline_parts)
+        raw.append({"text": text, "markup": markup, "italic": italic, "bold": bold, "subheading": subheading})
 
     # Merge consecutive segments with the same formatting so multi-line verses
     # (e.g. poetry split by \n) become one paragraph with <br/> line breaks
@@ -274,7 +283,8 @@ def _expand_para(para) -> list[dict]:
                 and results[-1]["italic"]     == item["italic"]
                 and results[-1]["bold"]       == item["bold"]
                 and results[-1]["subheading"] == item["subheading"]):
-            results[-1]["text"] += "\n" + item["text"]
+            results[-1]["text"]   += "\n" + item["text"]
+            results[-1]["markup"] += "<br/>" + item["markup"]
         else:
             results.append(item)
 
@@ -643,7 +653,8 @@ def build_epub(
         fname = f"{uuid.uuid4().hex[:16]}.xhtml"
         para_parts = []
         for p in ch["paragraphs"]:
-            t = _xe_br(p["text"])
+            t      = _xe_br(p["text"])
+            markup = p.get("markup") or t
             if p["subheading"]:
                 para_parts.append(f'<h3>{t}</h3>\n')
             elif p["italic"] and p["bold"]:
@@ -653,7 +664,7 @@ def build_epub(
             elif p["bold"]:
                 para_parts.append(f'<p><b>{t}</b></p>\n')
             else:
-                para_parts.append(f'<p>{t}</p>\n')
+                para_parts.append(f'<p>{markup}</p>\n')
         paras = "".join(para_parts)
         title_card = _chapter_title_card(ch["title"], decor_name)
         body  = _wrap(
@@ -1035,7 +1046,8 @@ def build_paperback_pdf(
             story.append(ChapterAnchor(ch["title"]))
             story += _chapter_header(ch["title"])
             for p in ch["paragraphs"]:
-                t = _xe_br(p["text"])
+                t      = _xe_br(p["text"])
+                markup = p.get("markup") or t
                 if p["subheading"]:
                     story.append(Paragraph(t, s_subhead))
                 elif p["italic"]:
@@ -1043,7 +1055,7 @@ def build_paperback_pdf(
                 elif p["bold"]:
                     story.append(Paragraph(f'<b>{t}</b>', s_body))
                 else:
-                    story.append(Paragraph(t, s_body))
+                    story.append(Paragraph(markup, s_body))
             story.append(PageBreak())
         return story
 
@@ -1073,7 +1085,8 @@ def build_paperback_pdf(
         for ch in chapters:
             story += _chapter_header(ch["title"])
             for p in ch["paragraphs"]:
-                t = _xe_br(p["text"])
+                t      = _xe_br(p["text"])
+                markup = p.get("markup") or t
                 if p["subheading"]:
                     story.append(Paragraph(t, s_subhead))
                 elif p["italic"]:
@@ -1081,7 +1094,7 @@ def build_paperback_pdf(
                 elif p["bold"]:
                     story.append(Paragraph(f'<b>{t}</b>', s_body))
                 else:
-                    story.append(Paragraph(t, s_body))
+                    story.append(Paragraph(markup, s_body))
             story.append(PageBreak())
         return story
 
