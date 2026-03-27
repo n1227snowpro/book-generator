@@ -228,6 +228,48 @@ def _para_info(para) -> dict:
     return {"text": text, "italic": italic, "bold": bold, "subheading": subheading}
 
 
+def _expand_para(para) -> list[dict]:
+    """Split a paragraph that uses \\n as paragraph separators (n8n single-paragraph format)
+    into multiple virtual para_info dicts. Falls back to a single-item list for normal paragraphs."""
+    has_newlines = any('\n' in r.text for r in para.runs)
+    if not has_newlines:
+        return [_para_info(para)]
+
+    # Build segments split at newline run boundaries
+    segments: list[list[tuple]] = []
+    current: list[tuple] = []
+    for run in para.runs:
+        parts = run.text.split('\n')
+        for i, part in enumerate(parts):
+            if part:
+                current.append((part, run.bold, run.italic))
+            if i < len(parts) - 1:
+                segments.append(current)
+                current = []
+    if current:
+        segments.append(current)
+
+    results = []
+    for seg in segments:
+        text = ''.join(t for t, b, it in seg).strip()
+        if not text:
+            continue
+        # Strip leading * (markdown italic marker used by some n8n outputs)
+        raw_italic = False
+        if text.startswith('*'):
+            text = text.lstrip('*').strip()
+            raw_italic = True
+        total_chars  = sum(len(t) for t, b, it in seg if t.strip())
+        italic_chars = sum(len(t) for t, b, it in seg if it is True and t.strip())
+        bold_chars   = sum(len(t) for t, b, it in seg if b  is True and t.strip())
+        italic = raw_italic or (total_chars > 0 and italic_chars / total_chars > 0.5)
+        bold   = total_chars > 0 and bold_chars / total_chars > 0.5
+        subheading = bold or bool(text and _SUBHEAD_LABELS.match(text))
+        results.append({"text": text, "italic": italic, "bold": bold, "subheading": subheading})
+
+    return results if results else [_para_info(para)]
+
+
 def extract_chapters(doc: DocxDocument) -> list[dict]:
     chapters, current = [], {"title": "Introduction", "paragraphs": []}
     for para in doc.paragraphs:
@@ -239,7 +281,7 @@ def extract_chapters(doc: DocxDocument) -> list[dict]:
                 chapters.append(current)
             current = {"title": text, "paragraphs": []}
         else:
-            current["paragraphs"].append(_para_info(para))
+            current["paragraphs"].extend(_expand_para(para))
     if current["paragraphs"] or not chapters:
         chapters.append(current)
     return chapters or [{"title": "Content", "paragraphs": []}]
