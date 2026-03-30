@@ -72,6 +72,7 @@ $project_id = trim($data['project_id'] ?? '');
 $title      = trim($data['title']      ?? '');
 $author     = trim($data['author']     ?? '');
 $subtitle   = trim($data['subtitle']   ?? '');
+$no_bonus   = isset($data['bonus']) && $data['bonus'] === false;
 $book_url   = trim($data['book_url']   ?? '');
 
 if (empty($project_id)) webhook_error(400, 'Missing required field: project_id.');
@@ -110,6 +111,9 @@ $cmd_parts = [
 if (!empty($subtitle)) {
     $cmd_parts[] = '--subtitle';
     $cmd_parts[] = escapeshellarg($subtitle);
+}
+if ($no_bonus) {
+    $cmd_parts[] = '--no-bonus';
 }
 
 $cmd          = implode(' ', $cmd_parts) . ' 2>&1';
