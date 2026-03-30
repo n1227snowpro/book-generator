@@ -167,6 +167,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WI
     $author   = trim($_POST['author']   ?? '');
     $subtitle = trim($_POST['subtitle'] ?? '');
     $gh_repo  = trim($_POST['gh_repo']  ?? '');
+    $no_bonus = isset($_POST['no_bonus']) && $_POST['no_bonus'] === '1';
 
     if (empty($title)) {
         $response['error'] = 'Book title is required.';
@@ -255,6 +256,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WI
     if (!empty($subtitle)) {
         $cmd_parts[] = '--subtitle';
         $cmd_parts[] = escapeshellarg($subtitle);
+    }
+    if ($no_bonus) {
+        $cmd_parts[] = '--no-bonus';
     }
     $cmd = implode(' ', $cmd_parts) . ' 2>&1';
 
@@ -656,6 +660,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WI
         <input type="text" id="author" name="author" placeholder="e.g. Jane Smith" required>
       </div>
 
+      <!-- Bonus Page Toggle -->
+      <div class="form-group" style="display:flex; align-items:center; gap:12px;">
+        <label style="margin:0; display:flex; align-items:center; gap:10px; cursor:pointer; font-size:0.95rem;">
+          <input type="checkbox" id="bonus_toggle" name="no_bonus" value="0" style="display:none">
+          <span id="bonus-switch" onclick="toggleBonus()" style="
+            display:inline-block; width:44px; height:24px; background:#4a90d9;
+            border-radius:12px; position:relative; cursor:pointer; transition:background .2s;">
+            <span style="
+              position:absolute; top:3px; left:3px; width:18px; height:18px;
+              background:#fff; border-radius:50%; transition:left .2s;" id="bonus-knob"></span>
+          </span>
+          Include Bonus Page
+        </label>
+      </div>
+
       <!-- GitHub Repo -->
       <div class="form-group">
         <label for="gh_repo">GitHub Repository Name <span class="opt">optional — uploads PDF &amp; EPUB</span></label>
@@ -728,6 +747,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WI
       showFileName(dt.files[0].name);
     }
   });
+
+  // ── Bonus toggle ───────────────────────────────────────────────────────────
+  let bonusEnabled = true;
+  function toggleBonus() {
+    bonusEnabled = !bonusEnabled;
+    document.getElementById('bonus-switch').style.background = bonusEnabled ? '#4a90d9' : '#ccc';
+    document.getElementById('bonus-knob').style.left         = bonusEnabled ? '3px' : '23px';
+    document.getElementById('bonus_toggle').value            = bonusEnabled ? '0' : '1';
+  }
+  // init state — ON by default
+  document.getElementById('bonus-switch').style.background = '#4a90d9';
+  document.getElementById('bonus-knob').style.left         = '3px';
 
   // ── Source toggle ──────────────────────────────────────────────────────────
   function setSource(mode) {
