@@ -662,17 +662,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WI
 
       <!-- Bonus Page Toggle -->
       <div class="form-group" style="display:flex; align-items:center; gap:12px;">
-        <label style="margin:0; display:flex; align-items:center; gap:10px; cursor:pointer; font-size:0.95rem;">
-          <input type="hidden" id="bonus_toggle" name="no_bonus" value="0">
-          <span id="bonus-switch" onclick="toggleBonus()" style="
+        <input type="hidden" id="bonus_toggle" name="no_bonus" value="0">
+        <div id="bonus-switch" style="
             display:inline-block; width:44px; height:24px; background:#4a90d9;
-            border-radius:12px; position:relative; cursor:pointer; transition:background .2s;">
-            <span style="
-              position:absolute; top:3px; left:3px; width:18px; height:18px;
-              background:#fff; border-radius:50%; transition:left .2s;" id="bonus-knob"></span>
-          </span>
-          Include Bonus Page
-        </label>
+            border-radius:12px; position:relative; cursor:pointer; transition:background .2s; flex-shrink:0;">
+          <div id="bonus-knob" style="
+            position:absolute; top:3px; left:23px; width:18px; height:18px;
+            background:#fff; border-radius:50%; transition:left .2s;"></div>
+        </div>
+        <span style="font-size:0.95rem; cursor:pointer;" id="bonus-label">Include Bonus Page</span>
       </div>
 
       <!-- GitHub Repo -->
@@ -750,15 +748,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WI
 
   // ── Bonus toggle ───────────────────────────────────────────────────────────
   let bonusEnabled = true;
-  function toggleBonus() {
-    bonusEnabled = !bonusEnabled;
+  function updateBonusUI() {
     document.getElementById('bonus-switch').style.background = bonusEnabled ? '#4a90d9' : '#ccc';
-    document.getElementById('bonus-knob').style.left         = bonusEnabled ? '3px' : '23px';
+    document.getElementById('bonus-knob').style.left         = bonusEnabled ? '23px' : '3px';
     document.getElementById('bonus_toggle').value            = bonusEnabled ? '0' : '1';
   }
-  // init state — ON by default
-  document.getElementById('bonus-switch').style.background = '#4a90d9';
-  document.getElementById('bonus-knob').style.left         = '3px';
+  document.getElementById('bonus-switch').addEventListener('click', function() {
+    bonusEnabled = !bonusEnabled; updateBonusUI();
+  });
+  document.getElementById('bonus-label').addEventListener('click', function() {
+    bonusEnabled = !bonusEnabled; updateBonusUI();
+  });
+  updateBonusUI();
 
   // ── Source toggle ──────────────────────────────────────────────────────────
   function setSource(mode) {
