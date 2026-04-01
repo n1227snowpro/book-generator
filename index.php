@@ -663,7 +663,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WI
       <!-- Bonus Page Toggle -->
       <div class="form-group" style="display:flex; align-items:center; gap:12px;">
         <label style="margin:0; display:flex; align-items:center; gap:10px; cursor:pointer; font-size:0.95rem;">
-          <input type="checkbox" id="bonus_toggle" name="no_bonus" value="0" style="display:none">
+          <input type="hidden" id="bonus_toggle" name="no_bonus" value="0">
           <span id="bonus-switch" onclick="toggleBonus()" style="
             display:inline-block; width:44px; height:24px; background:#4a90d9;
             border-radius:12px; position:relative; cursor:pointer; transition:background .2s;">
