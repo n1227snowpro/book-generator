@@ -167,7 +167,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WI
     $author   = trim($_POST['author']   ?? '');
     $subtitle = trim($_POST['subtitle'] ?? '');
     $gh_repo  = trim($_POST['gh_repo']  ?? '');
-    $no_bonus = isset($_POST['no_bonus']) && $_POST['no_bonus'] === '1';
+    $no_bonus     = isset($_POST['no_bonus']) && $_POST['no_bonus'] === '1';
+    $para_spacing = max(4, min(30, (int)($_POST['para_spacing'] ?? 14)));
 
     if (empty($title)) {
         $response['error'] = 'Book title is required.';
@@ -259,6 +260,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WI
     }
     if ($no_bonus) {
         $cmd_parts[] = '--no-bonus';
+    }
+    if ($para_spacing !== 14) {
+        $cmd_parts[] = '--para-spacing';
+        $cmd_parts[] = (string)$para_spacing;
     }
     $cmd = implode(' ', $cmd_parts) . ' 2>&1';
 
@@ -658,6 +663,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WI
       <div class="form-group">
         <label for="author">Author <span style="color:#c0392b">*</span></label>
         <input type="text" id="author" name="author" placeholder="e.g. Jane Smith" required>
+      </div>
+
+      <!-- Paragraph Spacing -->
+      <div class="form-group">
+        <label for="para_spacing">Paragraph Spacing <span class="opt">points — default 14</span></label>
+        <div style="display:flex; align-items:center; gap:12px;">
+          <input type="range" id="para_spacing" name="para_spacing"
+            min="4" max="30" step="1" value="14"
+            style="flex:1; accent-color:#4a90d9;"
+            oninput="document.getElementById('para_spacing_val').textContent=this.value+'pt'">
+          <span id="para_spacing_val" style="min-width:32px; font-size:0.9rem; color:#555;">14pt</span>
+        </div>
       </div>
 
       <!-- Bonus Page Toggle -->

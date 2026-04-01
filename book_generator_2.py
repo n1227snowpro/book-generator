@@ -940,6 +940,7 @@ def build_paperback_pdf(
     bold_body_font: str = "Times-Bold",
     decoration_path: str | None = None,
     bonus: dict | None = None,
+    para_spacing: int = 14,
 ) -> None:
 
     BODY_SZ  = 10       # EB Garamond 10pt (Atticus setting)
@@ -951,10 +952,10 @@ def build_paperback_pdf(
 
     s_body = ParagraphStyle("Body",
         fontName=body_font, fontSize=BODY_SZ, leading=LEAD,
-        alignment=TA_JUSTIFY, spaceAfter=14, spaceBefore=0)
+        alignment=TA_JUSTIFY, spaceAfter=para_spacing, spaceBefore=0)
     s_body_italic = ParagraphStyle("BodyItalic",
         fontName=italic_font, fontSize=BODY_SZ, leading=LEAD,
-        alignment=TA_JUSTIFY, spaceAfter=14, spaceBefore=0)
+        alignment=TA_JUSTIFY, spaceAfter=para_spacing, spaceBefore=0)
     s_subhead = ParagraphStyle("SubHead",
         fontName=bold_body_font, fontSize=BODY_SZ, leading=LEAD,
         alignment=TA_LEFT, spaceAfter=4, spaceBefore=14)
@@ -1243,6 +1244,8 @@ def main():
                              "If omitted, looks for 'decoration.png' next to the script.")
     parser.add_argument("--bonus-json", default=None,
                         help="Path to JSON file describing the bonus page (overrides default)")
+    parser.add_argument("--para-spacing", type=int, default=14,
+                        help="Space after each body paragraph in points (default: 14)")
     parser.add_argument("--no-bonus",  action="store_true",
                         help="Omit the bonus page entirely")
     args = parser.parse_args()
@@ -1310,7 +1313,8 @@ def main():
                         chapters, body_font=body_f, head_font=head_f,
                         label_font=label_f, italic_font=italic_f,
                         bold_body_font=bold_body_f,
-                        decoration_path=decoration, bonus=bonus)
+                        decoration_path=decoration, bonus=bonus,
+                        para_spacing=args.para_spacing)
 
     print(f"\nDone! Output: {os.path.abspath(out_dir)}")
 
