@@ -1,73 +1,81 @@
 <?php
 // ════════════════════════════════════════════════════════════════════════════
-//  Book Generator — Webhook Endpoint
-//  POST /webhook.php
+//  Book Generator — Async Webhook Endpoint
 //
-//  Request body (JSON):
+//  Step 1 — Start a job (returns immediately, no timeout risk):
+//  POST /webhook.php
 //  {
 //    "project_id": "proj_abc123",
 //    "title":      "My Book Title",
 //    "subtitle":   "An Optional Subtitle",
 //    "author":     "Author Name",
-//    "book_url":   "https://docs.google.com/document/d/.../edit"
+//    "book_url":   "https://...",
+//    "bonus":      true          // optional, default true
 //  }
+//  Response: { "job_id": "wh_...", "status": "processing", "poll_url": "..." }
 //
-//  Response (JSON):
-//  {
-//    "project_id":    "proj_abc123",
-//    "success":       true,
-//    "pdf_filename":  "My_Book_Title_paperback.pdf",
-//    "epub_filename": "My_Book_Title.epub",
-//    "pdf_url":       "https://your-server/download.php?job=wh_proj_abc123_xx&type=pdf",
-//    "epub_url":      "https://your-server/download.php?job=wh_proj_abc123_xx&type=epub",
-//    "expires_at":    "2026-03-28T10:00:00+00:00",
-//    "error":         ""
-//  }
+//  Step 2 — Poll until done:
+//  GET /webhook.php?job=JOB_ID
+//  Response (processing): { "status": "processing" }
+//  Response (done):        { "status": "done", "project_id": "...",
+//                            "pdf_url": "...", "epub_url": "...",
+//                            "pdf_filename": "...", "epub_filename": "...",
+//                            "expires_at": "..." }
+//  Response (failed):      { "status": "failed", "error": "..." }
 //
-//  Optional authentication: set WEBHOOK_SECRET in config.php and pass it
-//  as the  X-Webhook-Secret  request header.
+//  Optional auth: X-Webhook-Secret header (set WEBHOOK_SECRET in config.php)
 // ════════════════════════════════════════════════════════════════════════════
 
 require __DIR__ . '/config.php';
 
 header('Content-Type: application/json; charset=utf-8');
-set_time_limit(600); // allow up to 10 min for large books
 
-// ── Helper ────────────────────────────────────────────────────────────────────
-function webhook_error(int $http_code, string $message, string $project_id = ''): void {
-    http_response_code($http_code);
-    echo json_encode([
-        'project_id' => $project_id,
-        'success'    => false,
-        'error'      => $message,
-        'pdf'        => null,
-        'epub'       => null,
-    ], JSON_UNESCAPED_UNICODE);
+function json_err(int $code, string $msg, array $extra = []): void {
+    http_response_code($code);
+    echo json_encode(array_merge(['error' => $msg], $extra), JSON_UNESCAPED_UNICODE);
     exit;
-}
-
-// ── Method check ──────────────────────────────────────────────────────────────
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    webhook_error(405, 'Method not allowed. Use POST.');
 }
 
 // ── Auth (optional) ───────────────────────────────────────────────────────────
 if (defined('WEBHOOK_SECRET') && WEBHOOK_SECRET !== '') {
-    $incoming_secret = $_SERVER['HTTP_X_WEBHOOK_SECRET'] ?? '';
-    if (!hash_equals(WEBHOOK_SECRET, $incoming_secret)) {
-        webhook_error(401, 'Unauthorized: invalid or missing X-Webhook-Secret header.');
+    $incoming = $_SERVER['HTTP_X_WEBHOOK_SECRET'] ?? '';
+    if (!hash_equals(WEBHOOK_SECRET, $incoming)) {
+        json_err(401, 'Unauthorized: invalid or missing X-Webhook-Secret header.');
     }
 }
 
-// ── Parse JSON body ───────────────────────────────────────────────────────────
-$raw  = file_get_contents('php://input');
-$data = json_decode($raw, true);
+// ══════════════════════════════════════════════════════════════════════════════
+//  GET /webhook.php?job=JOB_ID  →  poll job status
+// ══════════════════════════════════════════════════════════════════════════════
+if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+    $job = preg_replace('/[^\w\-]/', '', $_GET['job'] ?? '');
+    if (empty($job)) json_err(400, 'Missing job parameter.');
 
-if (!is_array($data)) {
-    webhook_error(400, 'Invalid JSON body.');
+    $job_dir    = TMP_BASE . '/' . $job;
+    $status_file = $job_dir . '/status.json';
+
+    if (!is_dir($job_dir)) json_err(404, 'Job not found or already expired.');
+    if (!is_file($status_file)) {
+        echo json_encode(['status' => 'processing']);
+        exit;
+    }
+
+    $status = json_decode(file_get_contents($status_file), true);
+    echo json_encode($status, JSON_UNESCAPED_UNICODE);
+    exit;
 }
 
-// ── Validate required fields ──────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+//  POST /webhook.php  →  start job (returns immediately)
+// ══════════════════════════════════════════════════════════════════════════════
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    json_err(405, 'Method not allowed. Use POST to start a job or GET?job=ID to poll.');
+}
+
+$raw  = file_get_contents('php://input');
+$data = json_decode($raw, true);
+if (!is_array($data)) json_err(400, 'Invalid JSON body.');
+
 $project_id = trim($data['project_id'] ?? '');
 $title      = trim($data['title']      ?? '');
 $author     = trim($data['author']     ?? '');
@@ -75,20 +83,17 @@ $subtitle   = trim($data['subtitle']   ?? '');
 $no_bonus   = isset($data['bonus']) && $data['bonus'] === false;
 $book_url   = trim($data['book_url']   ?? '');
 
-if (empty($project_id)) webhook_error(400, 'Missing required field: project_id.');
-if (empty($title))      webhook_error(400, 'Missing required field: title.',      $project_id);
-if (empty($author))     webhook_error(400, 'Missing required field: author.',     $project_id);
-if (empty($book_url))   webhook_error(400, 'Missing required field: book_url.',  $project_id);
+if (empty($project_id)) json_err(400, 'Missing required field: project_id.');
+if (empty($title))      json_err(400, 'Missing required field: title.');
+if (empty($author))     json_err(400, 'Missing required field: author.');
+if (empty($book_url))   json_err(400, 'Missing required field: book_url.');
 
-// Basic URL sanity
 $allowed_prefixes = ['http://', 'https://', 's3://'];
 $url_ok = false;
 foreach ($allowed_prefixes as $p) {
     if (str_starts_with($book_url, $p)) { $url_ok = true; break; }
 }
-if (!$url_ok) {
-    webhook_error(400, 'book_url must start with http://, https://, or s3://', $project_id);
-}
+if (!$url_ok) json_err(400, 'book_url must start with http://, https://, or s3://');
 
 // ── Create job directory ──────────────────────────────────────────────────────
 $job_id     = 'wh_' . preg_replace('/[^\w-]/', '_', $project_id) . '_' . bin2hex(random_bytes(3));
@@ -96,10 +101,22 @@ $job_dir    = TMP_BASE . '/' . $job_id;
 $output_dir = $job_dir . '/output';
 
 if (!mkdir($output_dir, 0755, true)) {
-    webhook_error(500, 'Failed to create job directory.', $project_id);
+    json_err(500, 'Failed to create job directory.');
 }
 
-// ── Build and run Python command ──────────────────────────────────────────────
+// ── Detect base URL for poll_url / download URLs ──────────────────────────────
+if (defined('SERVER_BASE_URL') && SERVER_BASE_URL !== '') {
+    $base_url = rtrim(SERVER_BASE_URL, '/');
+} else {
+    $scheme   = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+    $host     = $_SERVER['HTTP_HOST'] ?? 'localhost';
+    $dir      = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
+    $base_url = $scheme . '://' . $host . $dir;
+}
+
+$poll_url = $base_url . '/webhook.php?job=' . urlencode($job_id);
+
+// ── Build Python command ──────────────────────────────────────────────────────
 $cmd_parts = [
     escapeshellarg(PYTHON_BIN),
     escapeshellarg(GENERATOR_SCRIPT),
@@ -116,92 +133,70 @@ if ($no_bonus) {
     $cmd_parts[] = '--no-bonus';
 }
 
-$cmd          = implode(' ', $cmd_parts) . ' 2>&1';
-$output_lines = [];
-$exit_code    = 0;
-exec($cmd, $output_lines, $exit_code);
-$log = implode("\n", $output_lines);
+// ── Build completion callback shell snippet ───────────────────────────────────
+// After Python finishes, write status.json with the result.
+$status_file   = $job_dir . '/status.json';
+$log_file      = $job_dir . '/generator.log';
+$expires_at    = gmdate('c', time() + (FILE_TTL_HOURS * 3600));
+$dl_base       = $base_url . '/download.php?job=' . urlencode($job_id);
 
-// ── Locate generated files ────────────────────────────────────────────────────
-$pdf_path  = null;
-$epub_path = null;
+// PHP one-liner that writes the final status.json after Python completes
+$php_done = 'php -r ' . escapeshellarg(
+    '$od=' . var_export($output_dir, true) . ';' .
+    '$sf=' . var_export($status_file, true) . ';' .
+    '$pid=' . var_export($project_id, true) . ';' .
+    '$dlb=' . var_export($dl_base, true) . ';' .
+    '$exp=' . var_export($expires_at, true) . ';' .
+    '$ec=(int)$argv[1];' .
+    '$pdf=null;$epub=null;' .
+    'if(is_dir($od)){foreach(scandir($od) as $f){$fp=$od."/".$f;' .
+    'if(str_ends_with($f,"_paperback.pdf")&&is_file($fp))$pdf=$f;' .
+    'if(str_ends_with($f,".epub")&&is_file($fp))$epub=$f;}}' .
+    'if($ec===0&&($pdf||$epub)){' .
+    '$s=["status"=>"done","project_id"=>$pid,' .
+    '"pdf_url"=>$pdf?$dlb."&type=pdf":null,' .
+    '"epub_url"=>$epub?$dlb."&type=epub":null,' .
+    '"pdf_filename"=>$pdf,"epub_filename"=>$epub,' .
+    '"expires_at"=>$exp];' .
+    '}else{' .
+    '$s=["status"=>"failed","error"=>"Generation failed — no output files produced."];' .
+    '}' .
+    'file_put_contents($sf,json_encode($s));'
+);
 
-if (is_dir($output_dir)) {
-    foreach (scandir($output_dir) as $file) {
-        $fp = $output_dir . '/' . $file;
-        if (str_ends_with($file, '_paperback.pdf') && is_file($fp)) $pdf_path  = $fp;
-        if (str_ends_with($file, '.epub')           && is_file($fp)) $epub_path = $fp;
+$python_cmd  = implode(' ', $cmd_parts);
+$log_escaped = escapeshellarg($log_file);
+
+// Full background command: run python, capture exit code, write status, detach
+$bg_cmd = "nohup sh -c '{$python_cmd} > {$log_escaped} 2>&1; {$php_done} \$?' > /dev/null 2>&1 &";
+exec($bg_cmd);
+
+// ── Respond immediately ───────────────────────────────────────────────────────
+echo json_encode([
+    'job_id'     => $job_id,
+    'project_id' => $project_id,
+    'status'     => 'processing',
+    'poll_url'   => $poll_url,
+], JSON_UNESCAPED_UNICODE);
+
+// ── Cleanup old expired jobs (opportunistic) ──────────────────────────────────
+if (is_dir(TMP_BASE)) {
+    $ttl = FILE_TTL_HOURS * 3600;
+    foreach (scandir(TMP_BASE) as $dir) {
+        if (!str_starts_with($dir, 'wh_')) continue;
+        $path = TMP_BASE . '/' . $dir;
+        if (is_dir($path) && (time() - filemtime($path)) > $ttl) {
+            _wh_rmdir($path);
+        }
     }
 }
 
-if (!$pdf_path && !$epub_path) {
-    // Clean up before responding
-    _rmdir_recursive($job_dir);
-    http_response_code(500);
-    echo json_encode([
-        'project_id' => $project_id,
-        'success'    => false,
-        'error'      => 'Generation failed — no output files produced.',
-        'log'        => $log,
-        'pdf'        => null,
-        'epub'       => null,
-    ], JSON_UNESCAPED_UNICODE);
-    exit;
-}
-
-// ── Build download URLs ───────────────────────────────────────────────────────
-// Detect server base URL
-if (defined('SERVER_BASE_URL') && SERVER_BASE_URL !== '') {
-    $base_url = rtrim(SERVER_BASE_URL, '/');
-} else {
-    $scheme   = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-    $host     = $_SERVER['HTTP_HOST'] ?? 'localhost';
-    $dir      = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
-    $base_url = $scheme . '://' . $host . $dir;
-}
-
-$dl_base    = $base_url . '/download.php?job=' . urlencode($job_id);
-$expires_at = gmdate('c', time() + (FILE_TTL_HOURS * 3600));
-
-$response = [
-    'project_id'    => $project_id,
-    'success'       => true,
-    'error'         => '',
-    'pdf_filename'  => $pdf_path  ? basename($pdf_path)  : null,
-    'epub_filename' => $epub_path ? basename($epub_path) : null,
-    'pdf_url'       => $pdf_path  ? $dl_base . '&type=pdf'  : null,
-    'epub_url'      => $epub_path ? $dl_base . '&type=epub' : null,
-    'expires_at'    => $expires_at,
-    'log'           => $log,
-];
-
-// NOTE: job_dir is intentionally NOT deleted here — download.php serves it.
-// Files expire after FILE_TTL_HOURS (see config.php).
-
-echo json_encode($response, JSON_UNESCAPED_UNICODE);
-exit;
-
-// ── Utilities ─────────────────────────────────────────────────────────────────
-function _rmdir_recursive(string $dir): void {
+function _wh_rmdir(string $dir): void {
     if (!is_dir($dir)) return;
     foreach (scandir($dir) as $item) {
         if ($item === '.' || $item === '..') continue;
         $path = $dir . '/' . $item;
-        is_dir($path) ? _rmdir_recursive($path) : unlink($path);
+        is_dir($path) ? _wh_rmdir($path) : unlink($path);
     }
     rmdir($dir);
 }
-
-// ── Cleanup old expired jobs (runs opportunistically on each webhook call) ────
-function _cleanup_expired_jobs(string $tmp_base): void {
-    if (!is_dir($tmp_base)) return;
-    $ttl = defined('FILE_TTL_HOURS') ? FILE_TTL_HOURS * 3600 : 86400;
-    foreach (scandir($tmp_base) as $dir) {
-        if (!str_starts_with($dir, 'wh_')) continue;
-        $path = $tmp_base . '/' . $dir;
-        if (is_dir($path) && (time() - filemtime($path)) > $ttl) {
-            _rmdir_recursive($path);
-        }
-    }
-}
-_cleanup_expired_jobs(TMP_BASE);
