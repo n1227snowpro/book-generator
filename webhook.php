@@ -133,43 +133,68 @@ if ($no_bonus) {
     $cmd_parts[] = '--no-bonus';
 }
 
-// ── Build completion callback shell snippet ───────────────────────────────────
-// After Python finishes, write status.json with the result.
-$status_file   = $job_dir . '/status.json';
-$log_file      = $job_dir . '/generator.log';
-$expires_at    = gmdate('c', time() + (FILE_TTL_HOURS * 3600));
-$dl_base       = $base_url . '/download.php?job=' . urlencode($job_id);
-
-// PHP one-liner that writes the final status.json after Python completes
-$php_done = 'php -r ' . escapeshellarg(
-    '$od=' . var_export($output_dir, true) . ';' .
-    '$sf=' . var_export($status_file, true) . ';' .
-    '$pid=' . var_export($project_id, true) . ';' .
-    '$dlb=' . var_export($dl_base, true) . ';' .
-    '$exp=' . var_export($expires_at, true) . ';' .
-    '$ec=(int)$argv[1];' .
-    '$pdf=null;$epub=null;' .
-    'if(is_dir($od)){foreach(scandir($od) as $f){$fp=$od."/".$f;' .
-    'if(str_ends_with($f,"_paperback.pdf")&&is_file($fp))$pdf=$f;' .
-    'if(str_ends_with($f,".epub")&&is_file($fp))$epub=$f;}}' .
-    'if($ec===0&&($pdf||$epub)){' .
-    '$s=["status"=>"done","project_id"=>$pid,' .
-    '"pdf_url"=>$pdf?$dlb."&type=pdf":null,' .
-    '"epub_url"=>$epub?$dlb."&type=epub":null,' .
-    '"pdf_filename"=>$pdf,"epub_filename"=>$epub,' .
-    '"expires_at"=>$exp];' .
-    '}else{' .
-    '$s=["status"=>"failed","error"=>"Generation failed — no output files produced."];' .
-    '}' .
-    'file_put_contents($sf,json_encode($s));'
-);
-
+// ── Write a runner script into the job dir, then exec it ─────────────────────
+// Why a file instead of a one-liner?  On Ubuntu, Apache uses PrivateTmp, so
+// /tmp as seen by PHP is really /tmp/systemd-private-…/tmp/.  A nohup'd shell
+// runs *outside* that namespace and can't see the job dir.  By writing a PHP
+// runner script *inside* the job dir (which PHP can do) and launching it with
+// the PHP CLI binary, the child process inherits the same tmp view.
+$status_file = $job_dir . '/status.json';
+$log_file    = $job_dir . '/generator.log';
+$expires_at  = gmdate('c', time() + (FILE_TTL_HOURS * 3600));
+$dl_base     = $base_url . '/download.php?job=' . urlencode($job_id);
 $python_cmd  = implode(' ', $cmd_parts);
-$log_escaped = escapeshellarg($log_file);
 
-// Full background command: run python, capture exit code, write status, detach
-$bg_cmd = "nohup sh -c '{$python_cmd} > {$log_escaped} 2>&1; {$php_done} \$?' > /dev/null 2>&1 &";
-exec($bg_cmd);
+$runner_script = $job_dir . '/runner.php';
+$runner_code = '<?php' . "\n"
+    . '$cmd = ' . var_export($python_cmd . ' 2>&1', true) . ";\n"
+    . '$log = ' . var_export($log_file, true) . ";\n"
+    . '$sf  = ' . var_export($status_file, true) . ";\n"
+    . '$od  = ' . var_export($output_dir, true) . ";\n"
+    . '$pid = ' . var_export($project_id, true) . ";\n"
+    . '$dlb = ' . var_export($dl_base, true) . ";\n"
+    . '$exp = ' . var_export($expires_at, true) . ";\n"
+    . <<<'RUNNER'
+
+$out = []; $ec = 0;
+exec($cmd, $out, $ec);
+file_put_contents($log, implode("\n", $out));
+
+$pdf = null; $epub = null;
+if (is_dir($od)) {
+    foreach (scandir($od) as $f) {
+        $fp = $od . '/' . $f;
+        if (str_ends_with($f, '_paperback.pdf') && is_file($fp)) $pdf = $f;
+        if (str_ends_with($f, '.epub')           && is_file($fp)) $epub = $f;
+    }
+}
+
+if ($ec === 0 && ($pdf || $epub)) {
+    $s = [
+        'status'        => 'done',
+        'project_id'    => $pid,
+        'pdf_url'       => $pdf  ? $dlb . '&type=pdf'  : null,
+        'epub_url'      => $epub ? $dlb . '&type=epub' : null,
+        'pdf_filename'  => $pdf,
+        'epub_filename' => $epub,
+        'expires_at'    => $exp,
+    ];
+} else {
+    $s = [
+        'status' => 'failed',
+        'error'  => 'Generation failed (exit ' . $ec . '). See log.',
+        'log'    => implode("\n", array_slice($out, -30)),
+    ];
+}
+file_put_contents($sf, json_encode($s, JSON_UNESCAPED_UNICODE));
+RUNNER;
+
+file_put_contents($runner_script, $runner_code);
+chmod($runner_script, 0755);
+
+// Launch the runner in the background — it inherits Apache's private tmp view.
+$php_bin = PHP_BINARY ?: '/usr/bin/php';
+exec($php_bin . ' ' . escapeshellarg($runner_script) . ' > /dev/null 2>&1 &');
 
 // ── Respond immediately ───────────────────────────────────────────────────────
 echo json_encode([
