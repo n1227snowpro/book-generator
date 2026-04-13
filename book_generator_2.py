@@ -222,6 +222,15 @@ def is_subheading(para) -> bool:
     return (para.style.name or "").lower().strip() in SUBHEADING_STYLES
 
 
+def _clean_text(text: str) -> str:
+    """Remove artefacts that n8n/JSON generation leaves in docx content."""
+    # Strip backslash-escaped quotes: \" → "
+    text = text.replace('\\"', '"')
+    # Strip backslash-escaped apostrophes: \' → '
+    text = text.replace("\\'", "'")
+    return text
+
+
 def _para_default_italic(para) -> bool:
     """Return True if runs with italic=None in this paragraph should be considered italic.
 
@@ -288,7 +297,7 @@ def _run_is_italic(run, para_default: bool) -> bool:
 
 def _para_info(para) -> dict:
     """Return a dict with text and formatting flags for a paragraph."""
-    text = para.text.strip()
+    text = _clean_text(para.text.strip())
     runs = [r for r in para.runs if r.text.strip()]
     para_italic = _para_default_italic(para)
     total_chars  = sum(len(r.text) for r in runs)
@@ -334,7 +343,7 @@ def _expand_para(para) -> list[dict]:
 
     raw = []
     for seg in segments:
-        text = ''.join(t for t, b, it in seg).strip()
+        text = _clean_text(''.join(t for t, b, it in seg).strip())
         if not text:
             continue
         raw_italic = False
