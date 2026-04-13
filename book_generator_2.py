@@ -221,16 +221,35 @@ def is_subheading(para) -> bool:
     return (para.style.name or "").lower().strip() in SUBHEADING_STYLES
 
 
+def _para_style_italic(para) -> bool:
+    """Return True if the paragraph's resolved style chain specifies italic.
+    Needed because run.italic == None means 'inherited from style', not 'not italic'.
+    """
+    try:
+        style = para.style
+        while style:
+            if style.font.italic is True:
+                return True
+            if style.font.italic is False:
+                return False
+            style = getattr(style, 'base_style', None)
+    except Exception:
+        pass
+    return False
+
+
 def _para_info(para) -> dict:
     """Return a dict with text and formatting flags for a paragraph."""
     text = para.text.strip()
     runs = [r for r in para.runs if r.text.strip()]
     # Use majority-character heuristic: italic/bold if >50% of chars are marked as such.
     # r.italic returns None (inherited), True (explicit), or False (explicit off).
-    # Treat None as non-italic to avoid false positives.
-    total_chars = sum(len(r.text) for r in runs)
-    italic_chars = sum(len(r.text) for r in runs if r.italic is True)
-    bold_chars   = sum(len(r.text) for r in runs if r.bold   is True)
+    # Treat None as italic when the paragraph style is italic (e.g. Word's "Quote" style).
+    style_italic = _para_style_italic(para)
+    total_chars  = sum(len(r.text) for r in runs)
+    italic_chars = sum(len(r.text) for r in runs
+                       if r.italic is True or (r.italic is None and style_italic))
+    bold_chars   = sum(len(r.text) for r in runs if r.bold is True)
     italic = bool(runs) and total_chars > 0 and (italic_chars / total_chars) > 0.5
     bold   = bool(runs) and total_chars > 0 and (bold_chars   / total_chars) > 0.5
     # Subheading if: docx Heading2/3 style, all-bold run, or matches known label pattern
@@ -245,14 +264,17 @@ def _expand_para(para) -> list[dict]:
     if not has_newlines:
         return [_para_info(para)]
 
-    # Build segments split at newline run boundaries
+    # Build segments split at newline run boundaries.
+    # Resolve effective italic: None means inherited from style, not non-italic.
+    style_italic = _para_style_italic(para)
     segments: list[list[tuple]] = []
     current: list[tuple] = []
     for run in para.runs:
+        eff_italic = True if (run.italic is True or (run.italic is None and style_italic)) else (run.italic is True)
         parts = run.text.split('\n')
         for i, part in enumerate(parts):
             if part:
-                current.append((part, run.bold, run.italic))
+                current.append((part, run.bold, eff_italic))
             if i < len(parts) - 1:
                 segments.append(current)
                 current = []
