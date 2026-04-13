@@ -1,84 +1,44 @@
 <?php
-// ── Auto-deploy webhook ──────────────────────────────────────
-// Called by GitHub on every push to main branch.
-// Pulls latest code and syncs files to the web root.
+// ── Auto-deploy endpoint ──────────────────────────────────────────────────────
+// Two ways to trigger:
+//   1. GitHub webhook (POST, X-Hub-Signature-256 header)
+//   2. Manual: GET /auto-deploy.php?token=bookgen_2026_deploy
 
-define('DEPLOY_SECRET', getenv('DEPLOY_SECRET') ?: (defined('WEBHOOK_SECRET') ? WEBHOOK_SECRET : ''));
-define('REPO_DIR',      '/tmp/book-gen-deploy');
+define('DEPLOY_TOKEN',  'bookgen_2026_deploy');
+define('DEPLOY_SECRET', 'bookgen_deploy_a6bd43519369e97b80a5e8ec');
 define('WEB_DIR',       __DIR__);
 define('BRANCH',        'main');
-define('REPO_URL',      'https://github.com/n1227snowpro/book-generator.git');
-define('LOG_FILE',      '/tmp/book-gen-autodeploy.log');
 
-header('Content-Type: application/json');
+header('Content-Type: text/plain');
 
-function log_msg(string $msg): void {
-    $line = '[' . date('Y-m-d H:i:s') . '] ' . $msg . PHP_EOL;
-    file_put_contents(LOG_FILE, $line, FILE_APPEND);
-}
+// ── Auth ──────────────────────────────────────────────────────────────────────
+$manual = ($_GET['token'] ?? '') === DEPLOY_TOKEN;
 
-function respond(bool $ok, string $msg, int $code = 200): void {
-    http_response_code($code);
-    echo json_encode(['success' => $ok, 'message' => $msg]);
-    exit;
-}
-
-// ── Verify GitHub signature ───────────────────────────────────
-$secret = DEPLOY_SECRET;
-if (!empty($secret)) {
-    $sig = $_SERVER['HTTP_X_HUB_SIGNATURE_256'] ?? '';
+if (!$manual) {
+    $sig     = $_SERVER['HTTP_X_HUB_SIGNATURE_256'] ?? '';
     $payload = file_get_contents('php://input');
-    $expected = 'sha256=' . hash_hmac('sha256', $payload, $secret);
+    $expected = 'sha256=' . hash_hmac('sha256', $payload, DEPLOY_SECRET);
     if (!hash_equals($expected, $sig)) {
-        log_msg('ERROR: Invalid signature');
-        respond(false, 'Unauthorized', 401);
+        http_response_code(401);
+        exit("Unauthorized\n");
     }
-} else {
-    $payload = file_get_contents('php://input');
-}
-
-// ── Only deploy on push to main ───────────────────────────────
-$data = json_decode($payload, true);
-$ref  = $data['ref'] ?? '';
-if ($ref && $ref !== 'refs/heads/' . BRANCH) {
-    respond(true, 'Ignored: not main branch');
-}
-
-log_msg('Deploy triggered by push to ' . ($ref ?: 'unknown'));
-
-// ── Pull latest code ──────────────────────────────────────────
-$cmds = [];
-
-if (is_dir(REPO_DIR . '/.git')) {
-    $cmds[] = 'cd ' . REPO_DIR . ' && git fetch origin && git reset --hard origin/' . BRANCH;
-} else {
-    @mkdir(REPO_DIR, 0755, true);
-    $cmds[] = 'git clone --depth=1 --branch=' . BRANCH . ' ' . REPO_URL . ' ' . REPO_DIR;
-}
-
-// ── Sync files (never overwrite config.php) ───────────────────
-$files = ['book_generator_2.py', 'index.php', 'webhook.php', 'download.php', 'decoration.png'];
-foreach ($files as $f) {
-    $cmds[] = 'cp ' . REPO_DIR . '/' . $f . ' ' . WEB_DIR . '/' . $f;
-}
-
-$log = [];
-foreach ($cmds as $cmd) {
-    $output = [];
-    $code   = 0;
-    exec($cmd . ' 2>&1', $output, $code);
-    $line = ($code === 0 ? 'OK' : 'FAIL') . ': ' . $cmd;
-    $log[] = $line;
-    log_msg($line);
-    if ($code !== 0) {
-        log_msg('Output: ' . implode(' | ', $output));
-        respond(false, 'Deploy failed at: ' . $cmd, 500);
+    // Only deploy on push to main
+    $data = json_decode($payload, true);
+    $ref  = $data['ref'] ?? '';
+    if ($ref && $ref !== 'refs/heads/' . BRANCH) {
+        exit("Ignored: not main branch\n");
     }
 }
 
-// ── Fix permissions ───────────────────────────────────────────
-exec('chown -R www-data:www-data ' . WEB_DIR . ' 2>&1');
-exec('chmod -R 755 ' . WEB_DIR . ' 2>&1');
+// ── Deploy: fetch + reset --hard in the web dir ───────────────────────────────
+$dir = escapeshellarg(WEB_DIR);
+$cmd = "cd {$dir} && git config --global --add safe.directory " . WEB_DIR
+     . " && git fetch origin " . BRANCH
+     . " && git reset --hard origin/" . BRANCH
+     . " 2>&1";
 
-log_msg('Deploy complete');
-respond(true, 'Deployed successfully');
+$output = shell_exec($cmd);
+$ts     = date('Y-m-d H:i:s');
+file_put_contents('/tmp/deploy.log', "{$ts}\n{$output}\n", FILE_APPEND);
+
+echo "OK\n{$output}";
