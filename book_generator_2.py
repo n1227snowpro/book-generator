@@ -294,8 +294,16 @@ def _para_info(para) -> dict:
     total_chars  = sum(len(r.text) for r in runs)
     italic_chars = sum(len(r.text) for r in runs if _run_is_italic(r, para_italic))
     bold_chars   = sum(len(r.text) for r in runs if r.bold is True)
-    italic = bool(runs) and total_chars > 0 and (italic_chars / total_chars) > 0.5
-    bold   = bool(runs) and total_chars > 0 and (bold_chars   / total_chars) > 0.5
+    # A paragraph is italic if:
+    #   - majority (>50%) of chars are italic, OR
+    #   - the first run is italic (handles quote+attribution: "Quote." — Author, Source
+    #     where the quote is italic but the non-italic attribution makes majority < 50%)
+    first_run_italic = _run_is_italic(runs[0], para_italic) if runs else False
+    italic = bool(runs) and (
+        first_run_italic
+        or (total_chars > 0 and italic_chars / total_chars > 0.5)
+    )
+    bold   = bool(runs) and total_chars > 0 and (bold_chars / total_chars) > 0.5
     subheading = is_subheading(para) or bold or bool(text and _SUBHEAD_LABELS.match(text))
     return {"text": text, "italic": italic, "bold": bold, "subheading": subheading}
 
@@ -334,10 +342,13 @@ def _expand_para(para) -> list[dict]:
             text = text.lstrip('*').rstrip('*').strip()
             raw_italic = True
             seg = [(t, b, True) for t, b, it in seg]
-        total_chars  = sum(len(t) for t, b, it in seg if t.strip())
-        italic_chars = sum(len(t) for t, b, it in seg if it is True and t.strip())
-        bold_chars   = sum(len(t) for t, b, it in seg if b  is True and t.strip())
-        italic = raw_italic or (total_chars > 0 and italic_chars / total_chars > 0.5)
+        total_chars   = sum(len(t) for t, b, it in seg if t.strip())
+        italic_chars  = sum(len(t) for t, b, it in seg if it is True and t.strip())
+        bold_chars    = sum(len(t) for t, b, it in seg if b  is True and t.strip())
+        # Italic if: asterisk-marked, majority italic, OR first run is italic
+        # (last case handles "Quote." — Author where attribution is non-italic)
+        first_seg_italic = next((it for t, b, it in seg if t.strip()), False)
+        italic = raw_italic or first_seg_italic or (total_chars > 0 and italic_chars / total_chars > 0.5)
         bold   = total_chars > 0 and bold_chars / total_chars > 0.5
         subheading = bold or bool(text and _SUBHEAD_LABELS.match(text))
         # Build inline markup for body paragraphs to preserve per-run bold within a line
