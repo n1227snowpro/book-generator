@@ -39,6 +39,7 @@ from datetime import date
 from pathlib import Path
 
 from docx import Document as DocxDocument
+from docx.oxml.ns import qn as _qn
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT, TA_RIGHT
 from reportlab.lib.units import inch
@@ -221,10 +222,33 @@ def is_subheading(para) -> bool:
     return (para.style.name or "").lower().strip() in SUBHEADING_STYLES
 
 
-def _para_style_italic(para) -> bool:
-    """Return True if the paragraph's resolved style chain specifies italic.
-    Needed because run.italic == None means 'inherited from style', not 'not italic'.
+def _para_default_italic(para) -> bool:
+    """Return True if runs with italic=None in this paragraph should be considered italic.
+
+    run.italic == None means 'inherited' — the actual value comes from three places
+    (in priority order):
+      1. The paragraph's own rPr (pPr/rPr/w:i) — paragraph-mark character formatting
+      2. The paragraph's character (run) style chain
+      3. The paragraph's style font chain
+
+    All three are checked here so style-based italic (e.g. Word's 'Quote', 'Emphasis'
+    character style, or direct paragraph-mark formatting) is detected correctly.
     """
+    # 1. Paragraph-mark rPr (direct XML: <w:pPr><w:rPr><w:i/> …)
+    try:
+        pPr = para._element.pPr
+        if pPr is not None:
+            rPr = pPr.rPr
+            if rPr is not None:
+                i_elem = rPr.find(_qn('w:i'))
+                if i_elem is not None:
+                    val = i_elem.get(_qn('w:val'), 'true')
+                    if val.lower() not in ('false', '0', 'off'):
+                        return True
+    except Exception:
+        pass
+
+    # 2. Paragraph style font chain
     try:
         style = para.style
         while style:
@@ -235,24 +259,43 @@ def _para_style_italic(para) -> bool:
             style = getattr(style, 'base_style', None)
     except Exception:
         pass
+
     return False
+
+
+def _run_is_italic(run, para_default: bool) -> bool:
+    """Resolve the effective italic for a run, following the full inheritance chain.
+
+    Priority: explicit run formatting → character style chain → paragraph default.
+    """
+    if run.italic is True:
+        return True
+    if run.italic is False:
+        return False
+    # None = inherited. Check the run's character style first.
+    try:
+        style = run.style  # character style applied to this run
+        while style:
+            if style.font.italic is True:
+                return True
+            if style.font.italic is False:
+                return False
+            style = getattr(style, 'base_style', None)
+    except Exception:
+        pass
+    return para_default
 
 
 def _para_info(para) -> dict:
     """Return a dict with text and formatting flags for a paragraph."""
     text = para.text.strip()
     runs = [r for r in para.runs if r.text.strip()]
-    # Use majority-character heuristic: italic/bold if >50% of chars are marked as such.
-    # r.italic returns None (inherited), True (explicit), or False (explicit off).
-    # Treat None as italic when the paragraph style is italic (e.g. Word's "Quote" style).
-    style_italic = _para_style_italic(para)
+    para_italic = _para_default_italic(para)
     total_chars  = sum(len(r.text) for r in runs)
-    italic_chars = sum(len(r.text) for r in runs
-                       if r.italic is True or (r.italic is None and style_italic))
+    italic_chars = sum(len(r.text) for r in runs if _run_is_italic(r, para_italic))
     bold_chars   = sum(len(r.text) for r in runs if r.bold is True)
     italic = bool(runs) and total_chars > 0 and (italic_chars / total_chars) > 0.5
     bold   = bool(runs) and total_chars > 0 and (bold_chars   / total_chars) > 0.5
-    # Subheading if: docx Heading2/3 style, all-bold run, or matches known label pattern
     subheading = is_subheading(para) or bold or bool(text and _SUBHEAD_LABELS.match(text))
     return {"text": text, "italic": italic, "bold": bold, "subheading": subheading}
 
@@ -265,12 +308,12 @@ def _expand_para(para) -> list[dict]:
         return [_para_info(para)]
 
     # Build segments split at newline run boundaries.
-    # Resolve effective italic: None means inherited from style, not non-italic.
-    style_italic = _para_style_italic(para)
+    # Resolve effective italic per run (handles style/character-style inheritance).
+    para_italic = _para_default_italic(para)
     segments: list[list[tuple]] = []
     current: list[tuple] = []
     for run in para.runs:
-        eff_italic = True if (run.italic is True or (run.italic is None and style_italic)) else (run.italic is True)
+        eff_italic = _run_is_italic(run, para_italic)
         parts = run.text.split('\n')
         for i, part in enumerate(parts):
             if part:
