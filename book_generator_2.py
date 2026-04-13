@@ -1339,7 +1339,8 @@ def main():
     out_dir   = args.out_dir or os.path.dirname(os.path.abspath(input_path))
     fonts_dir = args.fonts_dir or str(SCRIPT_DIR)
     os.makedirs(out_dir, exist_ok=True)
-    safe = re.sub(r"[^\w\-]", "_", args.title)
+    safe = re.sub(r"[/\\]", "", args.title)
+    safe = re.sub(r"[^\w\-. ]", "_", safe).strip("_").replace(" ", "_")
 
     # Load bonus page: custom JSON > default content > disabled
     bonus = None
