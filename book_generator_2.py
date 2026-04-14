@@ -223,7 +223,11 @@ def is_subheading(para) -> bool:
 
 
 def _clean_text(text: str) -> str:
-    """Remove artefacts that n8n/JSON generation leaves in docx content."""
+    """Decode artefacts that n8n/JSON generation leaves in docx content."""
+    # Decode literal \uXXXX unicode escapes (e.g. \u2014 → —, \u2019 → ')
+    import re as _re
+    text = _re.sub(r'\\u([0-9a-fA-F]{4})',
+                   lambda m: chr(int(m.group(1), 16)), text)
     # Strip backslash-escaped quotes: \" → "
     text = text.replace('\\"', '"')
     # Strip backslash-escaped apostrophes: \' → '
