@@ -367,6 +367,7 @@ def _expand_para(para) -> list[dict]:
         # Build inline markup for body paragraphs to preserve per-run bold within a line
         inline_parts = []
         for chunk, b, it in seg:
+            chunk = _clean_text(chunk)
             esc = chunk.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
             if b and not italic:   # don't add <b> inside an all-italic paragraph
                 esc = f"<b>{esc}</b>"
