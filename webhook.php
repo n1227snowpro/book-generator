@@ -193,8 +193,11 @@ file_put_contents($runner_script, $runner_code);
 chmod($runner_script, 0755);
 
 // Launch the runner in the background — it inherits Apache's private tmp view.
+// Double-fork via a shell so the grandchild is adopted by init (PID 1),
+// which reaps it immediately when done — prevents zombie accumulation.
 $php_bin = PHP_BINARY ?: '/usr/bin/php';
-exec($php_bin . ' ' . escapeshellarg($runner_script) . ' > /dev/null 2>&1 &');
+$cmd = $php_bin . ' ' . escapeshellarg($runner_script) . ' > /dev/null 2>&1';
+exec("sh -c '(" . addslashes($cmd) . ") &' > /dev/null 2>&1 &");
 
 // ── Respond immediately ───────────────────────────────────────────────────────
 echo json_encode([
