@@ -1302,17 +1302,31 @@ def _download_url(url: str) -> str:
         return tmp.name
 
     # ── Direct HTTP/HTTPS ─────────────────────────────────────────────────────
-    import requests
+    # Use curl as the primary downloader — it handles IPv6 correctly on servers
+    # where Python's requests may time out trying IPv4 first (e.g. Cloudflare R2).
+    import subprocess
     from urllib.parse import urlparse
     path = urlparse(url).path
     ext  = "." + path.rsplit(".", 1)[-1] if "." in path else suffix
     tmp  = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
     tmp.close()
-    r = requests.get(url, stream=True, timeout=120)
-    r.raise_for_status()
-    with open(tmp.name, "wb") as fh:
-        for chunk in r.iter_content(32768):
-            fh.write(chunk)
+    print(f"  i  Downloading from URL: {url}")
+    try:
+        result = subprocess.run(
+            ["curl", "-L", "--max-time", "120", "--silent", "--show-error",
+             "-o", tmp.name, url],
+            capture_output=True, text=True, timeout=130
+        )
+        if result.returncode != 0:
+            sys.exit(f"Download failed: {result.stderr.strip()}")
+    except FileNotFoundError:
+        # curl not available — fall back to requests
+        import requests as _req
+        r = _req.get(url, stream=True, timeout=120)
+        r.raise_for_status()
+        with open(tmp.name, "wb") as fh:
+            for chunk in r.iter_content(32768):
+                fh.write(chunk)
     return tmp.name
 
 
