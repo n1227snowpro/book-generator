@@ -192,12 +192,24 @@ RUNNER;
 file_put_contents($runner_script, $runner_code);
 chmod($runner_script, 0755);
 
-// Launch the runner in the background — it inherits Apache's private tmp view.
-// Double-fork via a shell so the grandchild is adopted by init (PID 1),
-// which reaps it immediately when done — prevents zombie accumulation.
-$php_bin = PHP_BINARY ?: '/usr/bin/php';
-$cmd = $php_bin . ' ' . escapeshellarg($runner_script) . ' > /dev/null 2>&1';
-exec("sh -c '(" . addslashes($cmd) . ") &' > /dev/null 2>&1 &");
+// Write a launch.sh into the job dir and exec it.
+// Why not exec('php ... &') directly?
+//   - Apache prefork workers are long-lived; their background children
+//     become zombies because the worker never calls wait().
+// Why not sh -c '(php ...) &'?
+//   - escapeshellarg() wraps paths in single quotes; those can't be
+//     safely embedded inside sh -c '...' (single quotes can't escape).
+// Solution: write launch.sh to the job dir (which is inside Apache's
+//   private-tmp namespace), then exec it synchronously (it exits in <1ms
+//   after forking php). The grandchild php inherits the namespace and is
+//   adopted by init, which reaps it on completion — no zombies.
+$php_bin    = PHP_BINARY ?: '/usr/bin/php';
+$launch_sh  = $job_dir . '/launch.sh';
+file_put_contents($launch_sh,
+    "#!/bin/sh\n(" . $php_bin . ' ' . escapeshellarg($runner_script) . " > /dev/null 2>&1) &\n"
+);
+chmod($launch_sh, 0755);
+exec(escapeshellarg($launch_sh) . ' > /dev/null 2>&1');
 
 // ── Respond immediately ───────────────────────────────────────────────────────
 echo json_encode([
