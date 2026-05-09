@@ -32,8 +32,7 @@ if (!$manual) {
 
 // ── Deploy: fetch + reset --hard in the web dir ───────────────────────────────
 $dir = escapeshellarg(WEB_DIR);
-$cmd = "cd {$dir} && git config --global --add safe.directory " . WEB_DIR
-     . " && git fetch origin " . BRANCH
+$cmd = "cd {$dir} && git fetch origin " . BRANCH
      . " && git reset --hard origin/" . BRANCH
      . " 2>&1";
 
