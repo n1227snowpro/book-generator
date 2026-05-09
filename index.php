@@ -168,6 +168,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WI
     $subtitle = trim($_POST['subtitle'] ?? '');
     $gh_repo  = trim($_POST['gh_repo']  ?? '');
     $no_bonus     = isset($_POST['no_bonus']) && $_POST['no_bonus'] === '1';
+    $no_toc       = isset($_POST['no_toc'])   && $_POST['no_toc']   === '1';
     $para_spacing = max(4, min(30, (int)($_POST['para_spacing'] ?? 14)));
 
     if (empty($title)) {
@@ -260,6 +261,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WI
     }
     if ($no_bonus) {
         $cmd_parts[] = '--no-bonus';
+    }
+    if ($no_toc) {
+        $cmd_parts[] = '--no-toc';
     }
     if ($para_spacing !== 14) {
         $cmd_parts[] = '--para-spacing';
@@ -690,6 +694,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WI
         <span style="font-size:0.95rem; cursor:pointer;" id="bonus-label">Include Bonus Page</span>
       </div>
 
+      <!-- TOC Toggle -->
+      <div class="form-group" style="display:flex; align-items:center; gap:12px;">
+        <input type="hidden" id="toc_toggle" name="no_toc" value="0">
+        <div id="toc-switch" style="
+            display:inline-block; width:44px; height:24px; background:#4a90d9;
+            border-radius:12px; position:relative; cursor:pointer; transition:background .2s; flex-shrink:0;">
+          <div id="toc-knob" style="
+            position:absolute; top:3px; left:23px; width:18px; height:18px;
+            background:#fff; border-radius:50%; transition:left .2s;"></div>
+        </div>
+        <span style="font-size:0.95rem; cursor:pointer;" id="toc-label">Include Table of Contents (PDF)</span>
+      </div>
+
       <!-- GitHub Repo -->
       <div class="form-group">
         <label for="gh_repo">GitHub Repository Name <span class="opt">optional — uploads PDF &amp; EPUB</span></label>
@@ -777,6 +794,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WI
     bonusEnabled = !bonusEnabled; updateBonusUI();
   });
   updateBonusUI();
+
+  // ── TOC toggle ─────────────────────────────────────────────────────────────
+  let tocEnabled = true;
+  function updateTocUI() {
+    document.getElementById('toc-switch').style.background = tocEnabled ? '#4a90d9' : '#ccc';
+    document.getElementById('toc-knob').style.left         = tocEnabled ? '23px' : '3px';
+    document.getElementById('toc_toggle').value            = tocEnabled ? '0' : '1';
+  }
+  document.getElementById('toc-switch').addEventListener('click', function() {
+    tocEnabled = !tocEnabled; updateTocUI();
+  });
+  document.getElementById('toc-label').addEventListener('click', function() {
+    tocEnabled = !tocEnabled; updateTocUI();
+  });
+  updateTocUI();
 
   // ── Source toggle ──────────────────────────────────────────────────────────
   function setSource(mode) {

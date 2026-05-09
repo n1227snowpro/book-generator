@@ -1031,6 +1031,7 @@ def build_paperback_pdf(
     decoration_path: str | None = None,
     bonus: dict | None = None,
     para_spacing: int = 14,
+    include_toc: bool = True,
 ) -> None:
 
     BODY_SZ  = 10       # EB Garamond 10pt (Atticus setting)
@@ -1122,6 +1123,34 @@ def build_paperback_pdf(
         items.append(PageBreak())
         return items
 
+    def _toc_page(toc_pages: dict) -> list:
+        """Render a Table of Contents page (PDF only)."""
+        from reportlab.platypus import Table, TableStyle
+        items = []
+        items.append(Spacer(1, 0.3 * inch))
+        items.append(Paragraph("Table of Contents", s_toc_title))
+        items.append(Spacer(1, 0.25 * inch))
+        if toc_pages:
+            usable_w = PAGE_W - L_INNER - L_OUTER
+            s_pg_num = ParagraphStyle("TocPgNum",
+                fontName=body_font, fontSize=BODY_SZ, leading=20,
+                alignment=TA_RIGHT)
+            rows = []
+            for ch_title, pg in toc_pages.items():
+                rows.append([
+                    Paragraph(_xe(ch_title), s_toc_entry),
+                    Paragraph(str(pg), s_pg_num),
+                ])
+            t = Table(rows, colWidths=[usable_w * 0.87, usable_w * 0.13])
+            t.setStyle(TableStyle([
+                ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+                ('TOPPADDING',    (0, 0), (-1, -1), 2),
+            ]))
+            items.append(t)
+        items.append(PageBreak())
+        return items
+
     def make_story_with_anchors():
         story = []
         # Title page
@@ -1182,7 +1211,10 @@ def build_paperback_pdf(
         story.append(PageBreak())
         # Bonus page (after copyright)
         story += _bonus_page_story()
-        # Chapters (no TOC in paperback)
+        # TOC page (after bonus, before chapters) — only when chapter pages are known
+        if include_toc_pages:
+            story += _toc_page(include_toc_pages)
+        # Chapters
         for ch in chapters:
             story += _chapter_header(ch["title"])
             for p in ch["paragraphs"]:
@@ -1213,7 +1245,7 @@ def build_paperback_pdf(
     tdoc.build(make_story_with_anchors())
 
     real_doc = _MirrorMarginDoc(output_path, on_page_cb=cb.on_page)
-    real_doc.build(make_story(include_toc_pages=_chapter_pages))
+    real_doc.build(make_story(include_toc_pages=_chapter_pages if include_toc else None))
 
     print(f"  OK  PDF   ->  {output_path}")
 
@@ -1352,6 +1384,8 @@ def main():
                         help="Space after each body paragraph in points (default: 14)")
     parser.add_argument("--no-bonus",  action="store_true",
                         help="Omit the bonus page entirely")
+    parser.add_argument("--no-toc",    action="store_true",
+                        help="Omit the Table of Contents page from the PDF")
     args = parser.parse_args()
 
     _tmp_download = None
@@ -1419,7 +1453,8 @@ def main():
                         label_font=label_f, italic_font=italic_f,
                         bold_body_font=bold_body_f,
                         decoration_path=decoration, bonus=bonus,
-                        para_spacing=args.para_spacing)
+                        para_spacing=args.para_spacing,
+                        include_toc=not args.no_toc)
 
     print(f"\nDone! Output: {os.path.abspath(out_dir)}")
 

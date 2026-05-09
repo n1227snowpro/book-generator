@@ -81,6 +81,7 @@ $title      = trim($data['title']      ?? '');
 $author     = trim($data['author']     ?? '');
 $subtitle   = trim($data['subtitle']   ?? '');
 $no_bonus   = isset($data['bonus']) && $data['bonus'] === false;
+$no_toc     = isset($data['toc'])   && $data['toc']   === false;
 $book_url   = trim($data['book_url']   ?? '');
 
 if (empty($project_id)) json_err(400, 'Missing required field: project_id.');
@@ -131,6 +132,9 @@ if (!empty($subtitle)) {
 }
 if ($no_bonus) {
     $cmd_parts[] = '--no-bonus';
+}
+if ($no_toc) {
+    $cmd_parts[] = '--no-toc';
 }
 
 // ── Write a runner script into the job dir, then exec it ─────────────────────
