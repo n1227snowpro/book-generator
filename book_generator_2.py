@@ -1172,6 +1172,11 @@ def build_paperback_pdf(
         story.append(PageBreak())
         # Bonus page (after copyright)
         story += _bonus_page_story()
+        # Reserve exactly 1 page for the TOC so that the chapter page numbers
+        # collected in this tracking pass already account for the TOC page.
+        # (make_story will render the real TOC in that same slot.)
+        if include_toc:
+            story.append(PageBreak())
         for ch in chapters:
             story.append(ChapterAnchor(ch["title"]))
             story += _chapter_header(ch["title"])
