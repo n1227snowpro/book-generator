@@ -1151,9 +1151,15 @@ def build_paperback_pdf(
         items.append(PageBreak())
         return items
 
-    def make_story_with_anchors():
+    def make_full_story(include_toc_pages: dict | None = None) -> list:
+        """
+        Single story builder used for all passes.
+        Always includes ChapterAnchor flowables (zero-size, harmless in final render).
+          include_toc_pages=None → no TOC page  (pass 1 and non-TOC builds)
+          include_toc_pages=dict → render TOC with the supplied page numbers
+        """
         story = []
-        # Title page
+        # ── Title page ──────────────────────────────────────────────────────────
         story.append(Spacer(1, 2*inch))
         story.append(Paragraph(_xe(title), s_title_pg))
         if subtitle:
@@ -1164,19 +1170,19 @@ def build_paperback_pdf(
         story.append(Spacer(1, 0.4*inch))
         story.append(Paragraph(f"by {_xe(author)}", s_author_pg))
         story.append(PageBreak())
-        # Copyright (before bonus)
+        # ── Copyright ────────────────────────────────────────────────────────────
         story.append(Spacer(1, 3.5*inch))
         story.append(Paragraph(f"Copyright &#169; {date.today().year} by {_xe(author)}", s_copy))
         story.append(Paragraph("All rights reserved.", s_copy))
-        story.append(Paragraph("No portion of this book may be reproduced without written permission.", s_copy))
+        story.append(Paragraph("No portion of this book may be reproduced in any form "
+                                "without written permission from the publisher or author.", s_copy))
         story.append(PageBreak())
-        # Bonus page (after copyright)
+        # ── Bonus page ───────────────────────────────────────────────────────────
         story += _bonus_page_story()
-        # Reserve exactly 1 page for the TOC so that the chapter page numbers
-        # collected in this tracking pass already account for the TOC page.
-        # (make_story will render the real TOC in that same slot.)
-        if include_toc:
-            story.append(PageBreak())
+        # ── TOC page (when requested) ────────────────────────────────────────────
+        if include_toc_pages is not None:
+            story += _toc_page(include_toc_pages)
+        # ── Chapters (ChapterAnchor is zero-size, safe to leave in final render) ─
         for ch in chapters:
             story.append(ChapterAnchor(ch["title"]))
             story += _chapter_header(ch["title"])
@@ -1194,63 +1200,38 @@ def build_paperback_pdf(
             story.append(PageBreak())
         return story
 
-    def make_story(include_toc_pages: dict | None = None):
-        story = []
-        # Title page
-        story.append(Spacer(1, 2*inch))
-        story.append(Paragraph(_xe(title), s_title_pg))
-        if subtitle:
-            story.append(Spacer(1, 0.1*inch))
-            story.append(Paragraph(_xe(subtitle), s_subtitle_pg))
-        story.append(Spacer(1, 0.4*inch))
-        story.append(HRFlowable(width="50%", thickness=0.5, color=GREY, hAlign="CENTER"))
-        story.append(Spacer(1, 0.4*inch))
-        story.append(Paragraph(f"by {_xe(author)}", s_author_pg))
-        story.append(PageBreak())
-        # Copyright (before bonus)
-        story.append(Spacer(1, 3.5*inch))
-        story.append(Paragraph(f"Copyright &#169; {date.today().year} by {_xe(author)}", s_copy))
-        story.append(Paragraph("All rights reserved.", s_copy))
-        story.append(Paragraph("No portion of this book may be reproduced in any form "
-                                "without written permission from the publisher or author.", s_copy))
-        story.append(PageBreak())
-        # Bonus page (after copyright)
-        story += _bonus_page_story()
-        # TOC page (after bonus, before chapters) — only when chapter pages are known
-        if include_toc_pages:
-            story += _toc_page(include_toc_pages)
-        # Chapters
-        for ch in chapters:
-            story += _chapter_header(ch["title"])
-            for p in ch["paragraphs"]:
-                t      = _xe_br(p["text"])
-                markup = p.get("markup") or t
-                if p["subheading"]:
-                    story.append(Paragraph(t, s_subhead))
-                elif p["italic"]:
-                    story.append(Paragraph(t, s_body_italic))
-                elif p["bold"]:
-                    story.append(Paragraph(f'<b>{t}</b>', s_body))
-                else:
-                    story.append(Paragraph(markup, s_body))
-            story.append(PageBreak())
-        return story
-
     from io import BytesIO
 
-    class _TrackingDoc2(_MirrorMarginDoc):
+    class _TrackingDoc(_MirrorMarginDoc):
+        """Renders to a scratch buffer and records the page of every ChapterAnchor."""
+        def __init__(self, target: dict):
+            super().__init__(BytesIO())
+            self._target = target
+
         def handle_flowable(self, flowables):
             if flowables and isinstance(flowables[0], ChapterAnchor):
-                _chapter_pages[flowables[0].ch_title] = self.page
+                self._target[flowables[0].ch_title] = self.page
             super().handle_flowable(flowables)
 
-    _chapter_pages: dict[str, int] = {}
-    buf = BytesIO()
-    tdoc = _TrackingDoc2(buf)
-    tdoc.build(make_story_with_anchors())
+    if include_toc:
+        # ── Three-pass build ────────────────────────────────────────────────────
+        # Pass 1: no TOC → rough chapter page numbers
+        pages_p1: dict[str, int] = {}
+        _TrackingDoc(pages_p1).build(make_full_story(include_toc_pages=None))
 
-    real_doc = _MirrorMarginDoc(output_path, on_page_cb=cb.on_page)
-    real_doc.build(make_story(include_toc_pages=_chapter_pages if include_toc else None))
+        # Pass 2: with TOC (using pass-1 numbers) → corrected chapter page numbers.
+        # The TOC table has the same number of rows in pass 2 and pass 3, so the
+        # TOC occupies the same number of pages and chapter positions are stable.
+        pages_p2: dict[str, int] = {}
+        _TrackingDoc(pages_p2).build(make_full_story(include_toc_pages=pages_p1))
+
+        # Pass 3: final PDF with corrected page numbers in the TOC
+        real_doc = _MirrorMarginDoc(output_path, on_page_cb=cb.on_page)
+        real_doc.build(make_full_story(include_toc_pages=pages_p2))
+    else:
+        # ── Single-pass build (no TOC) ──────────────────────────────────────────
+        real_doc = _MirrorMarginDoc(output_path, on_page_cb=cb.on_page)
+        real_doc.build(make_full_story(include_toc_pages=None))
 
     print(f"  OK  PDF   ->  {output_path}")
 
