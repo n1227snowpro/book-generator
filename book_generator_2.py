@@ -375,20 +375,11 @@ def _expand_para(para) -> list[dict]:
         markup = "".join(inline_parts)
         raw.append({"text": text, "markup": markup, "italic": italic, "bold": bold, "subheading": subheading})
 
-    # Merge consecutive segments with the same formatting so multi-line verses
-    # (e.g. poetry split by \n) become one paragraph with <br/> line breaks
-    results = []
-    for item in raw:
-        if (results
-                and results[-1]["italic"]     == item["italic"]
-                and results[-1]["bold"]       == item["bold"]
-                and results[-1]["subheading"] == item["subheading"]):
-            results[-1]["text"]   += "\n" + item["text"]
-            results[-1]["markup"] += "<br/>" + item["markup"]
-        else:
-            results.append(item)
-
-    return results if results else [_para_info(para)]
+    # Do NOT merge segments — every \n-separated segment becomes its own paragraph
+    # so it gets the full spaceAfter gap.  Merging with <br/> caused spacing to
+    # disappear because <br/> inside a Paragraph only gives leading height (~6pt),
+    # not the 14pt spaceAfter that separates real paragraphs.
+    return raw if raw else [_para_info(para)]
 
 
 def extract_chapters(doc: DocxDocument) -> list[dict]:
