@@ -696,7 +696,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WI
 
       <!-- TOC Toggle -->
       <div class="form-group" style="display:flex; align-items:center; gap:12px;">
-        <input type="hidden" id="toc_toggle" name="no_toc" value="0">
+        <input type="hidden" id="toc_toggle" name="no_toc" value="1">
         <div id="toc-switch" style="
             display:inline-block; width:44px; height:24px; background:#4a90d9;
             border-radius:12px; position:relative; cursor:pointer; transition:background .2s; flex-shrink:0;">
@@ -796,7 +796,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WI
   updateBonusUI();
 
   // ── TOC toggle ─────────────────────────────────────────────────────────────
-  let tocEnabled = true;
+  let tocEnabled = false;
   function updateTocUI() {
     document.getElementById('toc-switch').style.background = tocEnabled ? '#4a90d9' : '#ccc';
     document.getElementById('toc-knob').style.left         = tocEnabled ? '23px' : '3px';

@@ -81,7 +81,9 @@ $title      = trim($data['title']      ?? '');
 $author     = trim($data['author']     ?? '');
 $subtitle   = trim($data['subtitle']   ?? '');
 $no_bonus   = isset($data['bonus']) && $data['bonus'] === false;
-$no_toc     = isset($data['toc'])   && $data['toc']   === false;
+// TOC is opt-in: only include when caller explicitly sends "toc": true.
+// Omitting the field (or sending false) keeps existing integrations unaffected.
+$no_toc     = !(isset($data['toc']) && $data['toc'] === true);
 $book_url   = trim($data['book_url']   ?? '');
 
 if (empty($project_id)) json_err(400, 'Missing required field: project_id.');
