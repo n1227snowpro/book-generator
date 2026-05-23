@@ -36,8 +36,11 @@ function json_err(int $code, string $msg, array $extra = []): void {
     exit;
 }
 
-// ── Auth (optional) ───────────────────────────────────────────────────────────
-if (defined('WEBHOOK_SECRET') && WEBHOOK_SECRET !== '') {
+// ── Auth (optional) — POST only ───────────────────────────────────────────────
+// GET polls are open: the job_id is an unguessable random token, so knowing
+// the URL is sufficient proof you started the job.
+if ($_SERVER['REQUEST_METHOD'] !== 'GET'
+    && defined('WEBHOOK_SECRET') && WEBHOOK_SECRET !== '') {
     $incoming = $_SERVER['HTTP_X_WEBHOOK_SECRET'] ?? '';
     if (!hash_equals(WEBHOOK_SECRET, $incoming)) {
         json_err(401, 'Unauthorized: invalid or missing X-Webhook-Secret header.');
