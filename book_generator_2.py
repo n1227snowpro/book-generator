@@ -770,11 +770,6 @@ def build_epub(
         '<p>All rights reserved.</p>'
         '<p>No portion of this book may be reproduced in any form without '
         'written permission from the publisher or author.</p>'
-        '<p>Scripture quotations taken from The Holy Bible, '
-        'New International Version&#xAE;, NIV&#xAE;. Copyright &#xA9; 1973, '
-        '1978, 1984, 2011 by Biblica, Inc. Used with permission of '
-        'Zondervan. All rights reserved worldwide. '
-        '<a href="https://www.zondervan.com">www.zondervan.com</a></p>'
         '</div></div></div>'
     )
     copy_html = _xhtml_page("Copyright", copy_body)
@@ -1208,13 +1203,6 @@ def build_paperback_pdf(
         story.append(Paragraph("All rights reserved.", s_copy))
         story.append(Paragraph("No portion of this book may be reproduced in any form "
                                 "without written permission from the publisher or author.", s_copy))
-        story.append(Spacer(1, 0.15*inch))
-        story.append(Paragraph("Scripture quotations taken from The Holy Bible, "
-                                "New International Version®, NIV®. Copyright © 1973, "
-                                "1978, 1984, 2011 by Biblica, Inc. Used with permission of "
-                                "Zondervan. All rights reserved worldwide. "
-                                '<link href="https://www.zondervan.com">www.zondervan.com</link>',
-                                s_copy))
         story.append(PageBreak())
         # ── Bonus page ───────────────────────────────────────────────────────────
         story += _bonus_page_story()
