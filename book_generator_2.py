@@ -345,6 +345,40 @@ def _expand_para(para) -> list[dict]:
     if current:
         segments.append(current)
 
+    # ── Multi-line italic block: *"...\n...\n..."* [— attribution] ─────────────
+    # When * wraps an entire quote block across multiple \n-split lines only the
+    # first segment starts with * (catching raw_italic), while middle lines get
+    # no italic treatment and the trailing * on the last line is never stripped.
+    # Detect this pattern and handle the whole block as a unit.
+    #
+    # Condition: first segment starts with *, AND last segment contains * but
+    # does NOT start with * (avoids misreading two consecutive *single-line*
+    # italic paragraphs as a multi-line block).
+    if len(segments) > 1:
+        _first = ''.join(t for t, b, it in segments[0]).strip()
+        _last  = ''.join(t for t, b, it in segments[-1]).strip()
+        if _first.startswith('*') and '*' in _last and not _last.startswith('*'):
+            _joined = '\n'.join(
+                ''.join(t for t, b, it in seg) for seg in segments
+            ).strip()
+            _close      = _joined.rfind('*', 1)       # last * after position 0
+            _italic_raw = _clean_text(_joined[1:_close].strip())
+            _attrib_raw = _clean_text(_joined[_close + 1:].strip())
+            _result: list[dict] = []
+            for _ln in _italic_raw.split('\n'):
+                _ln = _ln.strip()
+                if not _ln:
+                    continue
+                _esc = _ln.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                _result.append({"text": _ln, "markup": _esc,
+                                 "italic": True, "bold": False, "subheading": False})
+            # Only add attribution if it contains at least one letter/digit
+            if _attrib_raw and any(c.isalnum() for c in _attrib_raw):
+                _esc = _attrib_raw.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                _result.append({"text": _attrib_raw, "markup": _esc,
+                                 "italic": False, "bold": False, "subheading": False})
+            return _result if _result else [_para_info(para)]
+
     raw = []
     for seg in segments:
         text = _clean_text(''.join(t for t, b, it in seg).strip())
