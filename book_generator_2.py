@@ -232,6 +232,8 @@ def _clean_text(text: str) -> str:
     text = text.replace('\\"', '"')
     # Strip backslash-escaped apostrophes: \' → '
     text = text.replace("\\'", "'")
+    # Remove stray trailing backslashes (e.g. "..."\ — Author → "..." — Author)
+    text = _re.sub(r'\\(?=\s|—|–|-|$)', '', text)
     return text
 
 
