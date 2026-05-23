@@ -1356,9 +1356,15 @@ def _download_url(url: str) -> str:
     print(f"  i  Downloading from URL: {url}")
     try:
         result = subprocess.run(
-            ["curl", "-L", "--max-time", "120", "--silent", "--show-error",
+            ["curl", "-L",
+             "--max-time", "120",
+             "--connect-timeout", "30",
+             "--retry", "3",
+             "--retry-delay", "5",
+             "--retry-connrefused",
+             "--silent", "--show-error",
              "-o", tmp.name, url],
-            capture_output=True, text=True, timeout=130
+            capture_output=True, text=True, timeout=500
         )
         if result.returncode != 0:
             sys.exit(f"Download failed: {result.stderr.strip()}")
