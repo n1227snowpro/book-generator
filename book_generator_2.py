@@ -417,11 +417,42 @@ def _expand_para(para) -> list[dict]:
         raw.append({"text": text, "markup": markup, "italic": italic, "bold": bold,
                     "subheading": subheading, "attrib": _is_attrib(text)})
 
-    # Do NOT merge segments — every \n-separated segment becomes its own paragraph
-    # so it gets the full spaceAfter gap.  Merging with <br/> caused spacing to
-    # disappear because <br/> inside a Paragraph only gives leading height (~6pt),
-    # not the 14pt spaceAfter that separates real paragraphs.
+    # Collapse all-italic \n-split segments into one paragraph (joins with space).
+    # This handles quotes like "Line one\nline two." where both lines are italic —
+    # they should read as a single flowing sentence, not two stacked paragraphs.
+    if len(raw) > 1 and all(r['italic'] and not r['subheading'] for r in raw):
+        merged_text = ' '.join(r['text'] for r in raw)
+        merged_esc  = merged_text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        raw = [{"text": merged_text, "markup": merged_esc,
+                "italic": True, "bold": False, "subheading": False, "attrib": False}]
+
     return raw if raw else [_para_info(para)]
+
+
+def _merge_quote_attrib(paragraphs: list[dict]) -> list[dict]:
+    """Merge an italic paragraph immediately followed by an attribution into one inline paragraph.
+
+    Produces:  <i>quote text</i> — Source (WEB)
+    so both appear on the same line with no paragraph break between them.
+    """
+    result, i = [], 0
+    while i < len(paragraphs):
+        p      = paragraphs[i]
+        next_p = paragraphs[i + 1] if i + 1 < len(paragraphs) else None
+        if p['italic'] and not p['subheading'] and next_p and next_p.get('attrib'):
+            q_esc = p['text'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            a_esc = (next_p.get('markup')
+                     or next_p['text'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;'))
+            result.append({
+                "text":      f"{p['text']} {next_p['text']}",
+                "markup":    f"<i>{q_esc}</i> {a_esc}",
+                "italic":    False, "bold": False, "subheading": False, "attrib": False,
+            })
+            i += 2
+        else:
+            result.append(p)
+            i += 1
+    return result
 
 
 def extract_chapters(doc: DocxDocument) -> list[dict]:
@@ -438,6 +469,9 @@ def extract_chapters(doc: DocxDocument) -> list[dict]:
             current["paragraphs"].extend(_expand_para(para))
     if current["paragraphs"] or not chapters:
         chapters.append(current)
+    # Merge italic quote + following attribution into a single inline paragraph
+    for ch in chapters:
+        ch["paragraphs"] = _merge_quote_attrib(ch["paragraphs"])
     return chapters or [{"title": "Content", "paragraphs": []}]
 
 
