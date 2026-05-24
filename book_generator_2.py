@@ -301,6 +301,11 @@ def _run_is_italic(run, para_default: bool) -> bool:
     return para_default
 
 
+def _is_attrib(text: str) -> bool:
+    """True if this paragraph is a scripture/quote attribution (starts with a dash)."""
+    return text.startswith(('—', '–', '- '))
+
+
 def _para_info(para) -> dict:
     """Return a dict with text and formatting flags for a paragraph."""
     text = _clean_text(para.text.strip())
@@ -320,7 +325,8 @@ def _para_info(para) -> dict:
     )
     bold   = bool(runs) and total_chars > 0 and (bold_chars / total_chars) > 0.5
     subheading = is_subheading(para) or bold or bool(text and _SUBHEAD_LABELS.match(text))
-    return {"text": text, "italic": italic, "bold": bold, "subheading": subheading}
+    return {"text": text, "italic": italic, "bold": bold, "subheading": subheading,
+            "attrib": _is_attrib(text)}
 
 
 def _expand_para(para) -> list[dict]:
@@ -410,7 +416,8 @@ def _expand_para(para) -> list[dict]:
                 esc = f"<b>{esc}</b>"
             inline_parts.append(esc)
         markup = "".join(inline_parts)
-        raw.append({"text": text, "markup": markup, "italic": italic, "bold": bold, "subheading": subheading})
+        raw.append({"text": text, "markup": markup, "italic": italic, "bold": bold,
+                    "subheading": subheading, "attrib": _is_attrib(text)})
 
     # Do NOT merge segments — every \n-separated segment becomes its own paragraph
     # so it gets the full spaceAfter gap.  Merging with <br/> caused spacing to
