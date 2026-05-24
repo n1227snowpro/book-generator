@@ -234,7 +234,26 @@ def _clean_text(text: str) -> str:
     text = text.replace("\\'", "'")
     # Remove stray trailing backslashes (e.g. "..."\ — Author → "..." — Author)
     text = _re.sub(r'\\(?=\s|—|–|-|$)', '', text)
+    # Normalise CR/LF and other Unicode line/paragraph separators to plain \n
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
+    text = text.replace(' ', '\n').replace(' ', '\n')
+    # Strip non-printable control chars that render as ■ in PDF
+    # (everything below 0x20 except \n and \t, plus DEL and C1 controls)
+    text = _re.sub(r'[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F-\x9F]', '', text)
     return text
+
+
+def _normalise_run_text(text: str) -> str:
+    """Normalise raw run text BEFORE splitting on \\n into segments.
+
+    Same separator/control-char cleanup as _clean_text, applied at the run-text
+    level so that \\r, \\u2028, etc. correctly become \\n and trigger segment
+    splitting downstream.  No _re import overhead per call.
+    """
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
+    text = text.replace(' ', '\n').replace(' ', '\n')
+    import re as _re
+    return _re.sub(r'[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F-\x9F]', '', text)
 
 
 def _capitalize_quote(text: str) -> str:
@@ -326,7 +345,7 @@ def _is_attrib(text: str) -> bool:
 
 def _para_info(para) -> dict:
     """Return a dict with text and formatting flags for a paragraph."""
-    text = _clean_text(para.text.strip())
+    text = _clean_text(_normalise_run_text(para.text).strip())
     runs = [r for r in para.runs if r.text.strip()]
     para_italic = _para_default_italic(para)
     total_chars  = sum(len(r.text) for r in runs)
@@ -427,7 +446,9 @@ def _split_inline_star_block(text: str) -> list[dict] | None:
 def _expand_para(para) -> list[dict]:
     """Split a paragraph that uses \\n as paragraph separators (n8n single-paragraph format)
     into multiple virtual para_info dicts. Falls back to a single-item list for normal paragraphs."""
-    has_newlines = any('\n' in r.text for r in para.runs)
+    # Normalise all run text up-front: \r, U+2028/U+2029, control chars → \n or removed
+    run_texts = [_normalise_run_text(r.text) for r in para.runs]
+    has_newlines = any('\n' in rt for rt in run_texts)
     if not has_newlines:
         # Inline *...* split: handles "Topic*Quote*" merged-on-one-line case
         _raw_text = _clean_text(para.text.strip())
@@ -442,9 +463,9 @@ def _expand_para(para) -> list[dict]:
     para_italic = _para_default_italic(para)
     segments: list[list[tuple]] = []
     current: list[tuple] = []
-    for run in para.runs:
+    for run, run_text in zip(para.runs, run_texts):
         eff_italic = _run_is_italic(run, para_italic)
-        parts = run.text.split('\n')
+        parts = run_text.split('\n')
         for i, part in enumerate(parts):
             if part:
                 current.append((part, run.bold, eff_italic))
