@@ -356,7 +356,8 @@ def _expand_para(para) -> list[dict]:
     # ── Process each segment into a paragraph dict (preserves run-level formatting) ──
     # State machine for *...* italic blocks that span multiple \n-split segments.
     # Each segment becomes ONE dict; bold/italic/subheading detected from the
-    # original runs.  Quote+attribution merging happens later in _merge_quote_attrib.
+    # original runs.  Quote+attribution merging happens later in this function and
+    # again in _merge_quote_attrib (for cross-docx-paragraph cases).
     _OPEN_QUOTES = ('"', '“', '”', '‘')
     in_italic_block = False  # tracks * span across segments within this paragraph
     raw: list[dict] = []
@@ -365,17 +366,40 @@ def _expand_para(para) -> list[dict]:
         if not text:
             continue
 
-        # Track *...* markers across segments; strip them from the visible text
-        seg_italic_from_star = in_italic_block
+        # ── Force-close the italic block on attribution lines ────────────────
+        # AI-generated content sometimes omits the closing *. Without this check
+        # `in_italic_block` would stay True and propagate italic into the body
+        # paragraphs that follow the attribution. Attribution is never italic.
+        if _is_attrib(text):
+            in_italic_block = False
+            seg_italic_from_star = False
+        else:
+            seg_italic_from_star = in_italic_block
+
+        # ── Track *...* markers, including inline closing * within one segment ─
         if text.startswith('*'):
-            text = text.lstrip('*').strip()
+            text = text[1:].lstrip('*').strip()
             seg_italic_from_star = True
-            in_italic_block = True   # may close on this segment or a later one
+            in_italic_block = True
+            # If a closing * appears INSIDE this segment (e.g. "*Quote* — Source"),
+            # split it: italic part = before *, append non-italic after-part later.
+            _inline_close = text.find('*')
+            _after_inline = ''
+            if _inline_close >= 0:
+                _after_inline = text[_inline_close + 1:].strip()
+                text = text[:_inline_close].rstrip()
+                in_italic_block = False
+            else:
+                _after_inline = ''
+        else:
+            _after_inline = ''
+
         if text.endswith('*'):
             text = text.rstrip('*').strip()
             seg_italic_from_star = True
-            in_italic_block = False  # block closed on this segment
-        if not text:
+            in_italic_block = False
+
+        if not text and not _after_inline:
             continue
 
         # Run-level italic/bold detection (preserves Word-applied formatting)
@@ -398,8 +422,17 @@ def _expand_para(para) -> list[dict]:
             inline_parts.append(esc)
         markup = "".join(inline_parts)
 
-        raw.append({"text": text, "markup": markup, "italic": italic, "bold": bold,
-                    "subheading": subheading, "attrib": _is_attrib(text)})
+        if text:
+            raw.append({"text": text, "markup": markup, "italic": italic, "bold": bold,
+                        "subheading": subheading, "attrib": _is_attrib(text)})
+
+        # Emit the inline-after-* part as a separate non-italic paragraph
+        # (it's typically the attribution: "*Quote* — Source" → ['Quote' italic, '— Source' attrib])
+        if _after_inline:
+            _ae = _after_inline.replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
+            raw.append({"text": _after_inline, "markup": _ae,
+                        "italic": False, "bold": False,
+                        "subheading": False, "attrib": _is_attrib(_after_inline)})
 
     if not raw:
         return [_para_info(para)]
