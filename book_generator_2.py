@@ -353,162 +353,125 @@ def _expand_para(para) -> list[dict]:
     if current:
         segments.append(current)
 
-    # ── Unified *...* italic block detector (single-line AND multi-line) ─────────
-    # The n8n format puts an entire day's content in ONE paragraph with \n
-    # separating logical sections.  The scripture quote starts with * and may or
-    # may not have a closing *.  Everything after the attribution is regular body
-    # text that must be returned as separate paragraph dicts, not merged into the
-    # italic block.
-    _joined_raw = '\n'.join(''.join(t for t, b, it in seg) for seg in segments).strip()
-    if _joined_raw.startswith('*'):
-        _close = _joined_raw.rfind('*', 1)          # position of closing *
-
-        if _close > 0:
-            # ── Has proper closing * ──────────────────────────────────────────
-            _italic_raw  = _clean_text(_joined_raw[1:_close].strip())
-            _after_lines = [_clean_text(ln.strip())
-                            for ln in _joined_raw[_close + 1:].split('\n')
-                            if ln.strip()]
-            # First after-line may be the attribution; rest are regular body paras
-            if _after_lines and _is_attrib(_after_lines[0]):
-                _attrib_raw  = _after_lines[0]
-                _extra_lines = _after_lines[1:]
-            else:
-                _attrib_raw  = ''
-                _extra_lines = _after_lines
-        else:
-            # ── Opening * only (AI forgot closing *) ─────────────────────────
-            # Find the first attribution line; quote text is everything before it;
-            # body paragraphs are everything after it.
-            _all_lines  = [_clean_text(ln.strip())
-                           for ln in _joined_raw[1:].split('\n') if ln.strip()]
-            _attrib_idx = next((i for i, ln in enumerate(_all_lines) if _is_attrib(ln)), None)
-            if _attrib_idx is not None and _attrib_idx > 0:
-                _italic_raw  = '\n'.join(_all_lines[:_attrib_idx])
-                _attrib_raw  = _all_lines[_attrib_idx]
-                _extra_lines = _all_lines[_attrib_idx + 1:]
-            else:
-                # No attribution found — treat all as italic quote, no extras
-                _italic_raw  = '\n'.join(_all_lines)
-                _attrib_raw  = ''
-                _extra_lines = []
-
-        if '*' not in _italic_raw:                  # unambiguous single *...* block
-            _italic_single = ' '.join(
-                ln.strip() for ln in _italic_raw.split('\n') if ln.strip()
-            )
-            _esc_q = (_italic_single
-                      .replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;'))
-            has_attrib = bool(_attrib_raw and any(c.isalnum() for c in _attrib_raw))
-            _result: list[dict] = []
-            if _italic_single:
-                if has_attrib:
-                    _result.append({"text":         f"{_italic_single} {_attrib_raw}",
-                                    "_italic_text": _italic_single,
-                                    "_attrib_text": _attrib_raw,
-                                    "italic": False, "bold": False,
-                                    "subheading": False, "attrib": False,
-                                    "quote_attrib": True})
-                else:
-                    _result.append({"text": _italic_single, "markup": _esc_q,
-                                    "italic": True, "bold": False,
-                                    "subheading": False, "attrib": False})
-            # Body paragraphs that follow the attribution in the same docx paragraph
-            for _xl in _extra_lines:
-                _xe = _xl.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-                _result.append({"text": _xl, "markup": _xe,
-                                 "italic": False, "bold": False,
-                                 "subheading": False, "attrib": _is_attrib(_xl)})
-            if _result:
-                return _result
-
-    # ── Detect non-* quoted scripture: "Quote..." — Source ─────────────────────
-    # Some n8n output uses plain quotation marks without * italic markers.
-    # Recognise a paragraph that starts with an opening quote character and
-    # contains an attribution, either:
-    #   (a) on its own \n-separated line:   "Quote\n— Source"
-    #   (b) inline after a closing quote:   "Quote." — Source
-    _OPEN_QUOTES = ('"', '“', '”', '‘')  # ", ", ", '
-    _CLOSE_PUNCT = ('"', '”', '’', ':', '.', ';', '!', '?')  # sentence-ending chars
-    if _joined_raw[:1] in _OPEN_QUOTES:
-        _all_q_lines = [_clean_text(ln.strip())
-                        for ln in _joined_raw.split('\n') if ln.strip()]
-        # (a) attribution on its own line
-        _q_attrib_idx = next(
-            (i for i, ln in enumerate(_all_q_lines) if _is_attrib(ln)), None)
-        if _q_attrib_idx is not None and _q_attrib_idx > 0:
-            _q_italic_lines = _all_q_lines[:_q_attrib_idx]
-            _q_attrib_raw   = _all_q_lines[_q_attrib_idx]
-            _q_extra_lines  = _all_q_lines[_q_attrib_idx + 1:]
-            _q_italic_single = ' '.join(_q_italic_lines)
-            _q_result: list[dict] = [{"text":         f"{_q_italic_single} {_q_attrib_raw}",
-                                      "_italic_text": _q_italic_single,
-                                      "_attrib_text": _q_attrib_raw,
-                                      "italic": False, "bold": False,
-                                      "subheading": False, "attrib": False,
-                                      "quote_attrib": True}]
-            for _xl in _q_extra_lines:
-                _xe = _xl.replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
-                _q_result.append({"text": _xl, "markup": _xe, "italic": False,
-                                  "bold": False, "subheading": False, "attrib": _is_attrib(_xl)})
-            return _q_result
-        else:
-            # (b) inline attribution: find last em/en-dash in the single line
-            _q_last_em = max(_joined_raw.rfind('—'), _joined_raw.rfind('–'))
-            if _q_last_em > 1:
-                _q_before = _joined_raw[:_q_last_em].rstrip()
-                _q_after  = _joined_raw[_q_last_em:].strip()
-                # Only split if the text before the dash ends with closing punct/quote
-                if _q_before[-1:] in _CLOSE_PUNCT and any(c.isalnum() for c in _q_after):
-                    _q_italic_lines = [_clean_text(ln.strip())
-                                       for ln in _q_before.split('\n') if ln.strip()]
-                    _q_italic_single = ' '.join(_q_italic_lines)
-                    _q_attrib_raw    = _clean_text(_q_after)
-                    _q_extra_lines   = []
-                    return [{"text":         f"{_q_italic_single} {_q_attrib_raw}",
-                             "_italic_text": _q_italic_single,
-                             "_attrib_text": _q_attrib_raw,
-                             "italic": False, "bold": False,
-                             "subheading": False, "attrib": False,
-                             "quote_attrib": True}]
-            # No attribution found — return as italic (attrib may be a separate para)
-            _q_italic_single = ' '.join(_all_q_lines)
-            _q_esc = _q_italic_single.replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
-            return [{"text": _q_italic_single, "markup": _q_esc,
-                     "italic": True, "bold": False, "subheading": False, "attrib": False}]
-
-    # ── Fallback: per-segment processing (run-level italic, no *...* markers) ──
-    raw = []
+    # ── Process each segment into a paragraph dict (preserves run-level formatting) ──
+    # State machine for *...* italic blocks that span multiple \n-split segments.
+    # Each segment becomes ONE dict; bold/italic/subheading detected from the
+    # original runs.  Quote+attribution merging happens later in _merge_quote_attrib.
+    _OPEN_QUOTES = ('"', '“', '”', '‘')
+    in_italic_block = False  # tracks * span across segments within this paragraph
+    raw: list[dict] = []
     for seg in segments:
         text = _clean_text(''.join(t for t, b, it in seg).strip())
         if not text:
             continue
-        total_chars   = sum(len(t) for t, b, it in seg if t.strip())
-        italic_chars  = sum(len(t) for t, b, it in seg if it is True and t.strip())
-        bold_chars    = sum(len(t) for t, b, it in seg if b  is True and t.strip())
-        first_seg_italic = next((it for t, b, it in seg if t.strip()), False)
-        italic = first_seg_italic or (total_chars > 0 and italic_chars / total_chars > 0.5)
+
+        # Track *...* markers across segments; strip them from the visible text
+        seg_italic_from_star = in_italic_block
+        if text.startswith('*'):
+            text = text.lstrip('*').strip()
+            seg_italic_from_star = True
+            in_italic_block = True   # may close on this segment or a later one
+        if text.endswith('*'):
+            text = text.rstrip('*').strip()
+            seg_italic_from_star = True
+            in_italic_block = False  # block closed on this segment
+        if not text:
+            continue
+
+        # Run-level italic/bold detection (preserves Word-applied formatting)
+        total_chars  = sum(len(t) for t, b, it in seg if t.strip())
+        italic_chars = sum(len(t) for t, b, it in seg if it is True and t.strip())
+        bold_chars   = sum(len(t) for t, b, it in seg if b  is True and t.strip())
+        first_run_italic = next((it for t, b, it in seg if t.strip()), False)
+        italic = (seg_italic_from_star or first_run_italic
+                  or (total_chars > 0 and italic_chars / total_chars > 0.5))
         bold   = total_chars > 0 and bold_chars / total_chars > 0.5
         subheading = bold or bool(text and _SUBHEAD_LABELS.match(text))
+
+        # Build inline markup (preserves bold spans within a non-bold paragraph)
         inline_parts = []
         for chunk, b, it in seg:
-            chunk = _clean_text(chunk)
+            chunk = _clean_text(chunk).lstrip('*').rstrip('*')
             esc = chunk.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
             if b and not italic:
                 esc = f"<b>{esc}</b>"
             inline_parts.append(esc)
         markup = "".join(inline_parts)
+
         raw.append({"text": text, "markup": markup, "italic": italic, "bold": bold,
                     "subheading": subheading, "attrib": _is_attrib(text)})
 
-    # Collapse all-italic run-level segments into one paragraph (removes \n within quote).
-    if len(raw) > 1 and all(r['italic'] and not r['subheading'] for r in raw):
-        merged_text = ' '.join(r['text'] for r in raw)
-        merged_esc  = merged_text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-        raw = [{"text": merged_text, "markup": merged_esc,
-                "italic": True, "bold": False, "subheading": False, "attrib": False}]
+    if not raw:
+        return [_para_info(para)]
 
-    return raw if raw else [_para_info(para)]
+    # ── Collapse consecutive italic non-subheading segments from same *...* block ──
+    # A multi-line italic quote (split by \n within the docx paragraph) reads better
+    # as one flowing paragraph than as separate stacked lines.  We collapse runs of
+    # all-italic non-attribution segments into a single italic dict.
+    collapsed: list[dict] = []
+    buf: list[dict] = []
+    def _flush_buf():
+        if not buf:
+            return
+        if len(buf) == 1:
+            collapsed.append(buf[0])
+        else:
+            merged_text = ' '.join(r['text'] for r in buf)
+            merged_esc  = merged_text.replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
+            collapsed.append({"text": merged_text, "markup": merged_esc,
+                              "italic": True, "bold": False,
+                              "subheading": False, "attrib": False})
+        buf.clear()
+    for r in raw:
+        if r['italic'] and not r['subheading'] and not r['attrib']:
+            buf.append(r)
+        else:
+            _flush_buf()
+            collapsed.append(r)
+    _flush_buf()
+
+    # ── Inline quote-attribution merging within this paragraph ────────────────
+    # When a quote-like paragraph (italic OR starts with a quote char) is followed
+    # by an attribution paragraph, merge them into a single quote_attrib dict.
+    # This handles the same-docx-paragraph case; _merge_quote_attrib in
+    # extract_chapters handles the cross-docx-paragraph case.
+    merged: list[dict] = []
+    i = 0
+    while i < len(collapsed):
+        p = collapsed[i]
+        nxt = collapsed[i + 1] if i + 1 < len(collapsed) else None
+        is_quote_like = (p['italic']
+                         or p['text'][:1] in _OPEN_QUOTES) and not p['subheading']
+        if is_quote_like and nxt and nxt.get('attrib'):
+            merged.append({"text":         f"{p['text']} {nxt['text']}",
+                           "_italic_text": p['text'],
+                           "_attrib_text": nxt['text'],
+                           "italic": False, "bold": False, "subheading": False,
+                           "attrib": False, "quote_attrib": True})
+            i += 2
+        else:
+            # Also handle single-segment inline attribution: "Quote." — Source
+            if (p['text'][:1] in _OPEN_QUOTES and not p['subheading']
+                    and not p.get('quote_attrib')):
+                _last_em = max(p['text'].rfind('—'), p['text'].rfind('–'))
+                if _last_em > 0:
+                    _before = p['text'][:_last_em].rstrip()
+                    _after  = p['text'][_last_em:].strip()
+                    _close_punct = ('"', '”', '’', ':', '.', ';', '!', '?')
+                    if (_before and _before[-1] in _close_punct
+                            and any(c.isalnum() for c in _after)):
+                        merged.append({"text": p['text'],
+                                       "_italic_text": _before,
+                                       "_attrib_text": _after,
+                                       "italic": False, "bold": False,
+                                       "subheading": False, "attrib": False,
+                                       "quote_attrib": True})
+                        i += 1
+                        continue
+            merged.append(p)
+            i += 1
+
+    return merged
 
 
 def _merge_quote_attrib(paragraphs: list[dict]) -> list[dict]:
