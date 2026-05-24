@@ -354,30 +354,44 @@ def _expand_para(para) -> list[dict]:
         segments.append(current)
 
     # ── Unified *...* italic block detector (single-line AND multi-line) ─────────
-    # Handles every n8n variant, including AI-generated content that sometimes
-    # omits the closing *:
-    #   *"Quote."* — Source        → quote_attrib (closing * present)
-    #   *"Line1.\nLine2."* — Src   → quote_attrib (closing * present)
-    #   *"Quote.\n— Source"        → quote_attrib (no closing *, attrib on last line)
-    #   *"Quote."                  → italic para  (no closing *, no attrib)
+    # The n8n format puts an entire day's content in ONE paragraph with \n
+    # separating logical sections.  The scripture quote starts with * and may or
+    # may not have a closing *.  Everything after the attribution is regular body
+    # text that must be returned as separate paragraph dicts, not merged into the
+    # italic block.
     _joined_raw = '\n'.join(''.join(t for t, b, it in seg) for seg in segments).strip()
     if _joined_raw.startswith('*'):
         _close = _joined_raw.rfind('*', 1)          # position of closing *
 
         if _close > 0:
             # ── Has proper closing * ──────────────────────────────────────────
-            _italic_raw = _clean_text(_joined_raw[1:_close].strip())
-            _attrib_raw = _clean_text(_joined_raw[_close + 1:].strip())
-        else:
-            # ── Opening * only (AI forgot closing *) — treat rest as italic ──
-            _italic_raw = _clean_text(_joined_raw[1:].strip())
-            # Attribution may still be the last \n-split line (e.g. "— Ps 1:1")
-            _lines = [ln.strip() for ln in _italic_raw.split('\n') if ln.strip()]
-            if len(_lines) > 1 and _is_attrib(_lines[-1]):
-                _attrib_raw = _lines[-1]
-                _italic_raw = '\n'.join(_lines[:-1])
+            _italic_raw  = _clean_text(_joined_raw[1:_close].strip())
+            _after_lines = [_clean_text(ln.strip())
+                            for ln in _joined_raw[_close + 1:].split('\n')
+                            if ln.strip()]
+            # First after-line may be the attribution; rest are regular body paras
+            if _after_lines and _is_attrib(_after_lines[0]):
+                _attrib_raw  = _after_lines[0]
+                _extra_lines = _after_lines[1:]
             else:
-                _attrib_raw = ''
+                _attrib_raw  = ''
+                _extra_lines = _after_lines
+        else:
+            # ── Opening * only (AI forgot closing *) ─────────────────────────
+            # Find the first attribution line; quote text is everything before it;
+            # body paragraphs are everything after it.
+            _all_lines  = [_clean_text(ln.strip())
+                           for ln in _joined_raw[1:].split('\n') if ln.strip()]
+            _attrib_idx = next((i for i, ln in enumerate(_all_lines) if _is_attrib(ln)), None)
+            if _attrib_idx is not None and _attrib_idx > 0:
+                _italic_raw  = '\n'.join(_all_lines[:_attrib_idx])
+                _attrib_raw  = _all_lines[_attrib_idx]
+                _extra_lines = _all_lines[_attrib_idx + 1:]
+            else:
+                # No attribution found — treat all as italic quote, no extras
+                _italic_raw  = '\n'.join(_all_lines)
+                _attrib_raw  = ''
+                _extra_lines = []
 
         if '*' not in _italic_raw:                  # unambiguous single *...* block
             _italic_single = ' '.join(
@@ -386,17 +400,27 @@ def _expand_para(para) -> list[dict]:
             _esc_q = (_italic_single
                       .replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;'))
             has_attrib = bool(_attrib_raw and any(c.isalnum() for c in _attrib_raw))
-            if has_attrib:
-                return [{"text":         f"{_italic_single} {_attrib_raw}",
-                         "_italic_text": _italic_single,
-                         "_attrib_text": _attrib_raw,
-                         "italic": False, "bold": False,
-                         "subheading": False, "attrib": False,
-                         "quote_attrib": True}]
-            elif _italic_single:
-                return [{"text": _italic_single, "markup": _esc_q,
-                         "italic": True, "bold": False,
-                         "subheading": False, "attrib": False}]
+            _result: list[dict] = []
+            if _italic_single:
+                if has_attrib:
+                    _result.append({"text":         f"{_italic_single} {_attrib_raw}",
+                                    "_italic_text": _italic_single,
+                                    "_attrib_text": _attrib_raw,
+                                    "italic": False, "bold": False,
+                                    "subheading": False, "attrib": False,
+                                    "quote_attrib": True})
+                else:
+                    _result.append({"text": _italic_single, "markup": _esc_q,
+                                    "italic": True, "bold": False,
+                                    "subheading": False, "attrib": False})
+            # Body paragraphs that follow the attribution in the same docx paragraph
+            for _xl in _extra_lines:
+                _xe = _xl.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                _result.append({"text": _xl, "markup": _xe,
+                                 "italic": False, "bold": False,
+                                 "subheading": False, "attrib": _is_attrib(_xl)})
+            if _result:
+                return _result
 
     # ── Fallback: per-segment processing (run-level italic, no *...* markers) ──
     raw = []
