@@ -372,21 +372,19 @@ def _expand_para(para) -> list[dict]:
             _close      = _joined.rfind('*', 1)       # last * after position 0
             _italic_raw = _clean_text(_joined[1:_close].strip())
             _attrib_raw = _clean_text(_joined[_close + 1:].strip())
-            _result: list[dict] = []
-            for _ln in _italic_raw.split('\n'):
-                _ln = _ln.strip()
-                if not _ln:
-                    continue
-                _esc = _ln.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-                _result.append({"text": _ln, "markup": _esc,
-                                 "italic": True, "bold": False, "subheading": False})
-            # Only add attribution if it contains at least one letter/digit
-            if _attrib_raw and any(c.isalnum() for c in _attrib_raw):
-                _esc = _attrib_raw.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-                _result.append({"text": _attrib_raw, "markup": _esc,
-                                 "italic": False, "bold": False, "subheading": False,
-                                 "attrib": True})
-            return _result if _result else [_para_info(para)]
+            # Collapse \n within the quote into spaces → single unified paragraph
+            _italic_single = ' '.join(ln.strip() for ln in _italic_raw.split('\n') if ln.strip())
+            _esc_q = _italic_single.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            has_attrib = bool(_attrib_raw and any(c.isalnum() for c in _attrib_raw))
+            if has_attrib:
+                _esc_a = _attrib_raw.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                # Single paragraph: <i>quote</i> — Attribution (inline, no line break)
+                return [{"text": f"{_italic_single} {_attrib_raw}",
+                         "markup": f"<i>{_esc_q}</i> {_esc_a}",
+                         "italic": False, "bold": False, "subheading": False, "attrib": False}]
+            else:
+                return [{"text": _italic_single, "markup": _esc_q,
+                         "italic": True, "bold": False, "subheading": False, "attrib": False}]
 
     raw = []
     for seg in segments:
