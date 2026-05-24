@@ -360,15 +360,31 @@ def _split_inline_star_block(text: str) -> list[dict] | None:
     Returns None if no inline *...* block found, otherwise a list of dicts.
     """
     open_pos = text.find('*')
-    if open_pos < 0:
+    if open_pos <= 0:                  # need at least one char of prefix
         return None
     close_pos = text.find('*', open_pos + 1)
-    if close_pos <= open_pos + 1:
+
+    prefix = text[:open_pos].rstrip(' :')
+    if not prefix:
         return None
 
-    prefix      = text[:open_pos].rstrip(' :')
-    italic_text = _clean_text(text[open_pos + 1:close_pos].strip())
-    suffix      = text[close_pos + 1:].lstrip()
+    if close_pos > open_pos + 1:
+        # Well-formed *...*: italic between the two stars, suffix after
+        italic_text = _clean_text(text[open_pos + 1:close_pos].strip())
+        suffix      = text[close_pos + 1:].lstrip()
+    else:
+        # Opening * only (AI forgot closing *) — italic = everything after *
+        # Attribution may still appear within it (inline em/en-dash near the end)
+        rest = text[open_pos + 1:].strip()
+        # Find last em/en-dash that looks like an attribution separator
+        _last_em = max(rest.rfind(' — '), rest.rfind(' – '))
+        if _last_em > 0:
+            italic_text = _clean_text(rest[:_last_em].rstrip())
+            suffix      = _clean_text(rest[_last_em:].lstrip())
+        else:
+            italic_text = _clean_text(rest)
+            suffix      = ''
+
     if not italic_text:
         return None
 
