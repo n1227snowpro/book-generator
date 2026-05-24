@@ -347,11 +347,78 @@ def _para_info(para) -> dict:
             "attrib": _is_attrib(text)}
 
 
+def _split_inline_star_block(text: str) -> list[dict] | None:
+    """Detect 'prefix*italic*suffix' patterns within a single line.
+
+    The n8n LLM sometimes runs a date/topic heading right into a scripture quote
+    with no separator, e.g.:
+        "February 16 : The Living Word Fuel*"But he answered..."* — Matthew 4:4 (WEB)"
+    leaving raw * characters in the output and the heading visually glued to the
+    quote.  When detected, split into separate paragraph dicts: prefix (heading),
+    italic quote (merged with attribution if present), and any trailing body text.
+
+    Returns None if no inline *...* block found, otherwise a list of dicts.
+    """
+    open_pos = text.find('*')
+    if open_pos < 0:
+        return None
+    close_pos = text.find('*', open_pos + 1)
+    if close_pos <= open_pos + 1:
+        return None
+
+    prefix      = text[:open_pos].rstrip(' :')
+    italic_text = _clean_text(text[open_pos + 1:close_pos].strip())
+    suffix      = text[close_pos + 1:].lstrip()
+    if not italic_text:
+        return None
+
+    italic_text = _capitalize_quote(italic_text)
+    attrib_text = _clean_text(suffix) if suffix and _is_attrib(suffix) else ''
+    body_text   = '' if attrib_text else _clean_text(suffix)
+
+    result: list[dict] = []
+    if prefix:
+        # Heading-like prefix ("February 16 : Topic") → mark as subheading
+        import re as _re_h
+        is_heading = bool(_re_h.match(r'^[A-Z][a-z]+\s+\d+\s*[:\-]', prefix))
+        _p_esc = prefix.replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
+        result.append({"text": prefix, "markup": _p_esc,
+                       "italic": False, "bold": is_heading,
+                       "subheading": is_heading, "attrib": False})
+
+    if attrib_text:
+        result.append({"text":         f"{italic_text} {attrib_text}",
+                       "_italic_text": italic_text,
+                       "_attrib_text": attrib_text,
+                       "italic": False, "bold": False,
+                       "subheading": False, "attrib": False,
+                       "quote_attrib": True})
+    else:
+        _i_esc = italic_text.replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
+        result.append({"text": italic_text, "markup": _i_esc,
+                       "italic": True, "bold": False,
+                       "subheading": False, "attrib": False})
+
+    if body_text:
+        _b_esc = body_text.replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
+        result.append({"text": body_text, "markup": _b_esc,
+                       "italic": False, "bold": False,
+                       "subheading": False, "attrib": _is_attrib(body_text)})
+
+    return result
+
+
 def _expand_para(para) -> list[dict]:
     """Split a paragraph that uses \\n as paragraph separators (n8n single-paragraph format)
     into multiple virtual para_info dicts. Falls back to a single-item list for normal paragraphs."""
     has_newlines = any('\n' in r.text for r in para.runs)
     if not has_newlines:
+        # Inline *...* split: handles "Topic*Quote*" merged-on-one-line case
+        _raw_text = _clean_text(para.text.strip())
+        if '*' in _raw_text:
+            _split = _split_inline_star_block(_raw_text)
+            if _split:
+                return _split
         return [_para_info(para)]
 
     # Build segments split at newline run boundaries.
@@ -383,6 +450,18 @@ def _expand_para(para) -> list[dict]:
         text = _clean_text(''.join(t for t, b, it in seg).strip())
         if not text:
             continue
+
+        # ── Inline 'prefix*italic*suffix' split (no leading *, * embedded) ────
+        # When the AI runs a topic heading directly into a scripture quote on
+        # the same line (no separator), the segment text looks like
+        # 'February 16 : Topic*"Quote..."* — Source'.  Detect and split it into
+        # multiple dicts; subsequent segments continue from a clean state.
+        if not text.startswith('*') and '*' in text:
+            _inline_split = _split_inline_star_block(text)
+            if _inline_split:
+                raw.extend(_inline_split)
+                in_italic_block = False
+                continue
 
         # ── Force-close the italic block on attribution lines ────────────────
         # AI-generated content sometimes omits the closing *. Without this check
