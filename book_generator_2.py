@@ -378,7 +378,8 @@ def _expand_para(para) -> list[dict]:
             if _attrib_raw and any(c.isalnum() for c in _attrib_raw):
                 _esc = _attrib_raw.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
                 _result.append({"text": _attrib_raw, "markup": _esc,
-                                 "italic": False, "bold": False, "subheading": False})
+                                 "italic": False, "bold": False, "subheading": False,
+                                 "attrib": True})
             return _result if _result else [_para_info(para)]
 
     raw = []
@@ -497,6 +498,7 @@ EPUB_CSS = f"""
 .{THEME_ID} body {{ line-height: 1; }}
 .{THEME_ID} b {{ font-weight: bold; }}
 .{THEME_ID} em, .{THEME_ID} i {{ font-style: italic; }}
+.{THEME_ID} p.attrib {{ margin-top: 0.1em; }}
 
 .{THEME_ID} .wrapper {{
   overflow-wrap: break-word;
@@ -790,6 +792,8 @@ def build_epub(
                 para_parts.append(f'<p><em>{t}</em></p>\n')
             elif p["bold"]:
                 para_parts.append(f'<p><b>{t}</b></p>\n')
+            elif p.get("attrib"):
+                para_parts.append(f'<p class="attrib">{markup}</p>\n')
             else:
                 para_parts.append(f'<p>{markup}</p>\n')
         paras = "".join(para_parts)
@@ -1074,6 +1078,14 @@ def build_paperback_pdf(
     s_body_italic = ParagraphStyle("BodyItalic",
         fontName=italic_font, fontSize=BODY_SZ, leading=LEAD,
         alignment=TA_JUSTIFY, spaceAfter=para_spacing, spaceBefore=0)
+    # Tight variant: last italic line before an attribution — no bottom gap
+    s_body_italic_tight = ParagraphStyle("BodyItalicTight",
+        fontName=italic_font, fontSize=BODY_SZ, leading=LEAD,
+        alignment=TA_JUSTIFY, spaceAfter=2, spaceBefore=0)
+    # Attribution line (— Source): snugs up to the quote above it
+    s_body_attrib = ParagraphStyle("BodyAttrib",
+        fontName=body_font, fontSize=BODY_SZ, leading=LEAD,
+        alignment=TA_JUSTIFY, spaceAfter=para_spacing, spaceBefore=2)
     s_subhead = ParagraphStyle("SubHead",
         fontName=bold_body_font, fontSize=BODY_SZ, leading=LEAD,
         alignment=TA_LEFT, spaceAfter=4, spaceBefore=14)
@@ -1213,13 +1225,19 @@ def build_paperback_pdf(
         for ch in chapters:
             story.append(ChapterAnchor(ch["title"]))
             story += _chapter_header(ch["title"])
-            for p in ch["paragraphs"]:
+            paras = ch["paragraphs"]
+            for idx, p in enumerate(paras):
                 t      = _xe_br(p["text"])
                 markup = p.get("markup") or t
+                next_p = paras[idx + 1] if idx + 1 < len(paras) else None
                 if p["subheading"]:
                     story.append(Paragraph(t, s_subhead))
                 elif p["italic"]:
-                    story.append(Paragraph(t, s_body_italic))
+                    # Use tight spaceAfter when attribution follows immediately
+                    sty = s_body_italic_tight if (next_p and next_p.get("attrib")) else s_body_italic
+                    story.append(Paragraph(t, sty))
+                elif p.get("attrib"):
+                    story.append(Paragraph(markup, s_body_attrib))
                 elif p["bold"]:
                     story.append(Paragraph(f'<b>{t}</b>', s_body))
                 else:
