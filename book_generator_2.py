@@ -354,37 +354,49 @@ def _expand_para(para) -> list[dict]:
         segments.append(current)
 
     # ── Unified *...* italic block detector (single-line AND multi-line) ─────────
-    # Join all segments into one string and look for an opening * and a closing *.
-    # This handles every n8n format variant in one place:
-    #   *"Quote."* — Source          (single segment, attribution inline)
-    #   *"Quote.\nLine two."* — Src  (multiple segments, attribution inline)
-    #   *"Quote.\nLine two."*        (multiple segments, no attribution)
-    # Condition: joined text starts with *, closing * found, and the italic
-    # content between them contains no further * (unambiguous single block).
+    # Handles every n8n variant, including AI-generated content that sometimes
+    # omits the closing *:
+    #   *"Quote."* — Source        → quote_attrib (closing * present)
+    #   *"Line1.\nLine2."* — Src   → quote_attrib (closing * present)
+    #   *"Quote.\n— Source"        → quote_attrib (no closing *, attrib on last line)
+    #   *"Quote."                  → italic para  (no closing *, no attrib)
     _joined_raw = '\n'.join(''.join(t for t, b, it in seg) for seg in segments).strip()
     if _joined_raw.startswith('*'):
         _close = _joined_raw.rfind('*', 1)          # position of closing *
+
         if _close > 0:
+            # ── Has proper closing * ──────────────────────────────────────────
             _italic_raw = _clean_text(_joined_raw[1:_close].strip())
             _attrib_raw = _clean_text(_joined_raw[_close + 1:].strip())
-            if '*' not in _italic_raw:              # unambiguous single *...* block
-                _italic_single = ' '.join(
-                    ln.strip() for ln in _italic_raw.split('\n') if ln.strip()
-                )
-                _esc_q = (_italic_single
-                          .replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;'))
-                has_attrib = bool(_attrib_raw and any(c.isalnum() for c in _attrib_raw))
-                if has_attrib:
-                    return [{"text":         f"{_italic_single} {_attrib_raw}",
-                             "_italic_text": _italic_single,
-                             "_attrib_text": _attrib_raw,
-                             "italic": False, "bold": False,
-                             "subheading": False, "attrib": False,
-                             "quote_attrib": True}]
-                else:
-                    return [{"text": _italic_single, "markup": _esc_q,
-                             "italic": True, "bold": False,
-                             "subheading": False, "attrib": False}]
+        else:
+            # ── Opening * only (AI forgot closing *) — treat rest as italic ──
+            _italic_raw = _clean_text(_joined_raw[1:].strip())
+            # Attribution may still be the last \n-split line (e.g. "— Ps 1:1")
+            _lines = [ln.strip() for ln in _italic_raw.split('\n') if ln.strip()]
+            if len(_lines) > 1 and _is_attrib(_lines[-1]):
+                _attrib_raw = _lines[-1]
+                _italic_raw = '\n'.join(_lines[:-1])
+            else:
+                _attrib_raw = ''
+
+        if '*' not in _italic_raw:                  # unambiguous single *...* block
+            _italic_single = ' '.join(
+                ln.strip() for ln in _italic_raw.split('\n') if ln.strip()
+            )
+            _esc_q = (_italic_single
+                      .replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;'))
+            has_attrib = bool(_attrib_raw and any(c.isalnum() for c in _attrib_raw))
+            if has_attrib:
+                return [{"text":         f"{_italic_single} {_attrib_raw}",
+                         "_italic_text": _italic_single,
+                         "_attrib_text": _attrib_raw,
+                         "italic": False, "bold": False,
+                         "subheading": False, "attrib": False,
+                         "quote_attrib": True}]
+            elif _italic_single:
+                return [{"text": _italic_single, "markup": _esc_q,
+                         "italic": True, "bold": False,
+                         "subheading": False, "attrib": False}]
 
     # ── Fallback: per-segment processing (run-level italic, no *...* markers) ──
     raw = []
