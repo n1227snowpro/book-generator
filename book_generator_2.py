@@ -237,6 +237,24 @@ def _clean_text(text: str) -> str:
     return text
 
 
+def _capitalize_quote(text: str) -> str:
+    """Capitalize the first alphabetic character in a quote.
+
+    Some WEB verses begin mid-sentence (e.g. 1 Peter 5:7 reads "casting all
+    your worries on him..."). When the verse is pulled out as a stand-alone
+    quote, the first letter should be uppercase. Skips leading whitespace,
+    quotation marks, and other punctuation.
+    """
+    if not text:
+        return text
+    for i, c in enumerate(text):
+        if c.isalpha():
+            if c.islower():
+                return text[:i] + c.upper() + text[i + 1:]
+            return text  # already uppercase
+    return text
+
+
 def _para_default_italic(para) -> bool:
     """Return True if runs with italic=None in this paragraph should be considered italic.
 
@@ -423,6 +441,10 @@ def _expand_para(para) -> list[dict]:
         markup = "".join(inline_parts)
 
         if text:
+            # Quotes (italic, non-attribution) get their first letter capitalised
+            if italic and not _is_attrib(text):
+                text = _capitalize_quote(text)
+                markup = _capitalize_quote(markup)
             raw.append({"text": text, "markup": markup, "italic": italic, "bold": bold,
                         "subheading": subheading, "attrib": _is_attrib(text)})
 
@@ -449,7 +471,7 @@ def _expand_para(para) -> list[dict]:
         if len(buf) == 1:
             collapsed.append(buf[0])
         else:
-            merged_text = ' '.join(r['text'] for r in buf)
+            merged_text = _capitalize_quote(' '.join(r['text'] for r in buf))
             merged_esc  = merged_text.replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
             collapsed.append({"text": merged_text, "markup": merged_esc,
                               "italic": True, "bold": False,
@@ -476,8 +498,9 @@ def _expand_para(para) -> list[dict]:
         is_quote_like = (p['italic']
                          or p['text'][:1] in _OPEN_QUOTES) and not p['subheading']
         if is_quote_like and nxt and nxt.get('attrib'):
-            merged.append({"text":         f"{p['text']} {nxt['text']}",
-                           "_italic_text": p['text'],
+            _q_cap = _capitalize_quote(p['text'])
+            merged.append({"text":         f"{_q_cap} {nxt['text']}",
+                           "_italic_text": _q_cap,
                            "_attrib_text": nxt['text'],
                            "italic": False, "bold": False, "subheading": False,
                            "attrib": False, "quote_attrib": True})
@@ -493,8 +516,9 @@ def _expand_para(para) -> list[dict]:
                     _close_punct = ('"', '”', '’', ':', '.', ';', '!', '?')
                     if (_before and _before[-1] in _close_punct
                             and any(c.isalnum() for c in _after)):
-                        merged.append({"text": p['text'],
-                                       "_italic_text": _before,
+                        _b_cap = _capitalize_quote(_before)
+                        merged.append({"text": f"{_b_cap} {_after}",
+                                       "_italic_text": _b_cap,
                                        "_attrib_text": _after,
                                        "italic": False, "bold": False,
                                        "subheading": False, "attrib": False,
@@ -530,9 +554,10 @@ def _merge_quote_attrib(paragraphs: list[dict]) -> list[dict]:
         _is_quote_para = (p['italic'] or
                           _p_text[:1] in ('"', '“', '”', '‘', '’'))
         if _is_quote_para and not p['subheading'] and next_p and next_p.get('attrib'):
+            _cap_quote = _capitalize_quote(p['text'])
             result.append({
-                "text":          f"{p['text']} {next_p['text']}",
-                "_italic_text":  p['text'],       # raw; escaped at render time
+                "text":          f"{_cap_quote} {next_p['text']}",
+                "_italic_text":  _cap_quote,      # raw; escaped at render time
                 "_attrib_text":  next_p['text'],  # raw; escaped at render time
                 "italic":        False, "bold": False, "subheading": False,
                 "attrib":        False, "quote_attrib": True,
