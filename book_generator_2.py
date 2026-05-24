@@ -234,12 +234,17 @@ def _clean_text(text: str) -> str:
     text = text.replace("\\'", "'")
     # Remove stray trailing backslashes (e.g. "..."\ — Author → "..." — Author)
     text = _re.sub(r'\\(?=\s|—|–|-|$)', '', text)
-    # Normalise CR/LF and other Unicode line/paragraph separators to plain \n
+    # Normalise CR/LF and Unicode line/paragraph separators to plain \n
     text = text.replace('\r\n', '\n').replace('\r', '\n')
-    text = text.replace(' ', '\n').replace(' ', '\n')
-    # Strip non-printable control chars that render as ■ in PDF
-    # (everything below 0x20 except \n and \t, plus DEL and C1 controls)
-    text = _re.sub(r'[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F-\x9F]', '', text)
+    text = text.replace('\u2028', '\n').replace('\u2029', '\n')
+    # Invisible Unicode formatting chars (Zero-Width Space U+200B, ZWNJ, ZWJ,
+    # LRM/RLM, Word Joiner U+2060, BOM U+FEFF, bidi overrides U+202A-202E,
+    # invisible operators U+2061-2064, etc.) -- the n8n LLM uses these as
+    # separators but PDF fonts have no glyph so they render as ■.  Convert
+    # each to \n so segment splitting still happens.
+    text = _re.sub(r'[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]', '\n', text)
+    # Strip non-printable control chars, soft hyphen, variation selectors
+    text = _re.sub(r'[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F-\x9F\u00AD\uFE00-\uFE0F]', '', text)
     return text
 
 
@@ -247,13 +252,15 @@ def _normalise_run_text(text: str) -> str:
     """Normalise raw run text BEFORE splitting on \\n into segments.
 
     Same separator/control-char cleanup as _clean_text, applied at the run-text
-    level so that \\r, \\u2028, etc. correctly become \\n and trigger segment
-    splitting downstream.  No _re import overhead per call.
+    level so that \\r, \\u2060, \\u2028, etc. correctly become \\n and trigger
+    segment splitting downstream.
     """
-    text = text.replace('\r\n', '\n').replace('\r', '\n')
-    text = text.replace(' ', '\n').replace(' ', '\n')
     import re as _re
-    return _re.sub(r'[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F-\x9F]', '', text)
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
+    text = text.replace('\u2028', '\n').replace('\u2029', '\n')
+    text = _re.sub(r'[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]', '\n', text)
+    text = _re.sub(r'[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F-\x9F\u00AD\uFE00-\uFE0F]', '', text)
+    return text
 
 
 def _capitalize_quote(text: str) -> str:
