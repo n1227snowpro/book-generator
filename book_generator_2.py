@@ -432,21 +432,27 @@ def _expand_para(para) -> list[dict]:
 def _merge_quote_attrib(paragraphs: list[dict]) -> list[dict]:
     """Merge an italic paragraph immediately followed by an attribution into one inline paragraph.
 
-    Produces:  <i>quote text</i> — Source (WEB)
-    so both appear on the same line with no paragraph break between them.
+    Stores the raw italic text and attribution text separately under private keys so
+    the PDF renderer can wrap the italic part in <font face="<italic_font>"> explicitly
+    (rather than <i>, which requires font-family registration to work) and the EPUB
+    renderer can wrap it in <em>.  Both produce:
+
+        quote text — Source (WEB)
+        ↑italic    ↑normal
+
+    as a single flowing paragraph with no line break between quote and attribution.
     """
     result, i = [], 0
     while i < len(paragraphs):
         p      = paragraphs[i]
         next_p = paragraphs[i + 1] if i + 1 < len(paragraphs) else None
         if p['italic'] and not p['subheading'] and next_p and next_p.get('attrib'):
-            q_esc = p['text'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-            a_esc = (next_p.get('markup')
-                     or next_p['text'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;'))
             result.append({
-                "text":      f"{p['text']} {next_p['text']}",
-                "markup":    f"<i>{q_esc}</i> {a_esc}",
-                "italic":    False, "bold": False, "subheading": False, "attrib": False,
+                "text":          f"{p['text']} {next_p['text']}",
+                "_italic_text":  p['text'],       # raw; escaped at render time
+                "_attrib_text":  next_p['text'],  # raw; escaped at render time
+                "italic":        False, "bold": False, "subheading": False,
+                "attrib":        False, "quote_attrib": True,
             })
             i += 2
         else:
@@ -827,6 +833,10 @@ def build_epub(
                 para_parts.append(f'<h3>{t}</h3>\n')
             elif p["italic"] and p["bold"]:
                 para_parts.append(f'<p><em><b>{t}</b></em></p>\n')
+            elif p.get("quote_attrib"):
+                q_t = _xe_br(p["_italic_text"])
+                a_t = _xe_br(p["_attrib_text"])
+                para_parts.append(f'<p><em>{q_t}</em> {a_t}</p>\n')
             elif p["italic"]:
                 para_parts.append(f'<p><em>{t}</em></p>\n')
             elif p["bold"]:
@@ -1271,10 +1281,17 @@ def build_paperback_pdf(
                 next_p = paras[idx + 1] if idx + 1 < len(paras) else None
                 if p["subheading"]:
                     story.append(Paragraph(t, s_subhead))
+                elif p.get("quote_attrib"):
+                    # Italic quote + attribution in one paragraph.
+                    # Use explicit <font face="..."> rather than <i> so italic
+                    # rendering works regardless of font-family registration.
+                    q_esc = p["_italic_text"].replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
+                    a_esc = p["_attrib_text"].replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
+                    story.append(Paragraph(
+                        f'<font face="{italic_font}">{q_esc}</font> {a_esc}',
+                        s_body))
                 elif p["italic"]:
-                    # Use tight spaceAfter when attribution follows immediately
-                    sty = s_body_italic_tight if (next_p and next_p.get("attrib")) else s_body_italic
-                    story.append(Paragraph(t, sty))
+                    story.append(Paragraph(t, s_body_italic))
                 elif p.get("attrib"):
                     story.append(Paragraph(markup, s_body_attrib))
                 elif p["bold"]:
