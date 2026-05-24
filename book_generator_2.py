@@ -353,73 +353,64 @@ def _expand_para(para) -> list[dict]:
     if current:
         segments.append(current)
 
-    # ── Multi-line italic block: *"...\n...\n..."* [— attribution] ─────────────
-    # When * wraps an entire quote block across multiple \n-split lines only the
-    # first segment starts with * (catching raw_italic), while middle lines get
-    # no italic treatment and the trailing * on the last line is never stripped.
-    # Detect this pattern and handle the whole block as a unit.
-    #
-    # Condition: first segment starts with *, AND last segment contains * but
-    # does NOT start with * (avoids misreading two consecutive *single-line*
-    # italic paragraphs as a multi-line block).
-    if len(segments) > 1:
-        _first = ''.join(t for t, b, it in segments[0]).strip()
-        _last  = ''.join(t for t, b, it in segments[-1]).strip()
-        if _first.startswith('*') and '*' in _last and not _last.startswith('*'):
-            _joined = '\n'.join(
-                ''.join(t for t, b, it in seg) for seg in segments
-            ).strip()
-            _close      = _joined.rfind('*', 1)       # last * after position 0
-            _italic_raw = _clean_text(_joined[1:_close].strip())
-            _attrib_raw = _clean_text(_joined[_close + 1:].strip())
-            # Collapse \n within the quote into spaces → single unified paragraph
-            _italic_single = ' '.join(ln.strip() for ln in _italic_raw.split('\n') if ln.strip())
-            _esc_q = _italic_single.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-            has_attrib = bool(_attrib_raw and any(c.isalnum() for c in _attrib_raw))
-            if has_attrib:
-                _esc_a = _attrib_raw.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-                # Single paragraph: <i>quote</i> — Attribution (inline, no line break)
-                return [{"text": f"{_italic_single} {_attrib_raw}",
-                         "markup": f"<i>{_esc_q}</i> {_esc_a}",
-                         "italic": False, "bold": False, "subheading": False, "attrib": False}]
-            else:
-                return [{"text": _italic_single, "markup": _esc_q,
-                         "italic": True, "bold": False, "subheading": False, "attrib": False}]
+    # ── Unified *...* italic block detector (single-line AND multi-line) ─────────
+    # Join all segments into one string and look for an opening * and a closing *.
+    # This handles every n8n format variant in one place:
+    #   *"Quote."* — Source          (single segment, attribution inline)
+    #   *"Quote.\nLine two."* — Src  (multiple segments, attribution inline)
+    #   *"Quote.\nLine two."*        (multiple segments, no attribution)
+    # Condition: joined text starts with *, closing * found, and the italic
+    # content between them contains no further * (unambiguous single block).
+    _joined_raw = '\n'.join(''.join(t for t, b, it in seg) for seg in segments).strip()
+    if _joined_raw.startswith('*'):
+        _close = _joined_raw.rfind('*', 1)          # position of closing *
+        if _close > 0:
+            _italic_raw = _clean_text(_joined_raw[1:_close].strip())
+            _attrib_raw = _clean_text(_joined_raw[_close + 1:].strip())
+            if '*' not in _italic_raw:              # unambiguous single *...* block
+                _italic_single = ' '.join(
+                    ln.strip() for ln in _italic_raw.split('\n') if ln.strip()
+                )
+                _esc_q = (_italic_single
+                          .replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;'))
+                has_attrib = bool(_attrib_raw and any(c.isalnum() for c in _attrib_raw))
+                if has_attrib:
+                    return [{"text":         f"{_italic_single} {_attrib_raw}",
+                             "_italic_text": _italic_single,
+                             "_attrib_text": _attrib_raw,
+                             "italic": False, "bold": False,
+                             "subheading": False, "attrib": False,
+                             "quote_attrib": True}]
+                else:
+                    return [{"text": _italic_single, "markup": _esc_q,
+                             "italic": True, "bold": False,
+                             "subheading": False, "attrib": False}]
 
+    # ── Fallback: per-segment processing (run-level italic, no *...* markers) ──
     raw = []
     for seg in segments:
         text = _clean_text(''.join(t for t, b, it in seg).strip())
         if not text:
             continue
-        raw_italic = False
-        if text.startswith('*'):
-            text = text.lstrip('*').rstrip('*').strip()
-            raw_italic = True
-            seg = [(t, b, True) for t, b, it in seg]
         total_chars   = sum(len(t) for t, b, it in seg if t.strip())
         italic_chars  = sum(len(t) for t, b, it in seg if it is True and t.strip())
         bold_chars    = sum(len(t) for t, b, it in seg if b  is True and t.strip())
-        # Italic if: asterisk-marked, majority italic, OR first run is italic
-        # (last case handles "Quote." — Author where attribution is non-italic)
         first_seg_italic = next((it for t, b, it in seg if t.strip()), False)
-        italic = raw_italic or first_seg_italic or (total_chars > 0 and italic_chars / total_chars > 0.5)
+        italic = first_seg_italic or (total_chars > 0 and italic_chars / total_chars > 0.5)
         bold   = total_chars > 0 and bold_chars / total_chars > 0.5
         subheading = bold or bool(text and _SUBHEAD_LABELS.match(text))
-        # Build inline markup for body paragraphs to preserve per-run bold within a line
         inline_parts = []
         for chunk, b, it in seg:
             chunk = _clean_text(chunk)
             esc = chunk.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
-            if b and not italic:   # don't add <b> inside an all-italic paragraph
+            if b and not italic:
                 esc = f"<b>{esc}</b>"
             inline_parts.append(esc)
         markup = "".join(inline_parts)
         raw.append({"text": text, "markup": markup, "italic": italic, "bold": bold,
                     "subheading": subheading, "attrib": _is_attrib(text)})
 
-    # Collapse all-italic \n-split segments into one paragraph (joins with space).
-    # This handles quotes like "Line one\nline two." where both lines are italic —
-    # they should read as a single flowing sentence, not two stacked paragraphs.
+    # Collapse all-italic run-level segments into one paragraph (removes \n within quote).
     if len(raw) > 1 and all(r['italic'] and not r['subheading'] for r in raw):
         merged_text = ' '.join(r['text'] for r in raw)
         merged_esc  = merged_text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
