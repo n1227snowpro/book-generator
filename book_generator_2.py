@@ -701,7 +701,19 @@ def extract_chapters(doc: DocxDocument) -> list[dict]:
         if is_chapter_heading(para):
             if current["paragraphs"]:
                 chapters.append(current)
-            current = {"title": text, "paragraphs": []}
+            # If the AI ran the heading directly into a scripture quote with
+            # no separator (e.g. "February 20 : Topic*\"Quote...\"* — Source"),
+            # split off the quote so it becomes the first paragraph of the
+            # chapter instead of part of the title.
+            _norm = _normalise_run_text(text)
+            title = _clean_text(_norm)
+            extra_paras: list[dict] = []
+            if '*' in _norm:
+                _split = _split_inline_star_block(_norm)
+                if _split:
+                    title = _split[0]['text']
+                    extra_paras = _split[1:]
+            current = {"title": title, "paragraphs": extra_paras}
         else:
             current["paragraphs"].extend(_expand_para(para))
     if current["paragraphs"] or not chapters:
