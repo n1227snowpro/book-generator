@@ -1667,35 +1667,65 @@ def _download_url(url: str) -> str:
     # Use curl as the primary downloader — it handles IPv6 correctly on servers
     # where Python's requests may time out trying IPv4 first (e.g. Cloudflare R2).
     import subprocess
+    import time as _time
     from urllib.parse import urlparse
     path = urlparse(url).path
     ext  = "." + path.rsplit(".", 1)[-1] if "." in path else suffix
     tmp  = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
     tmp.close()
     print(f"  i  Downloading from URL: {url}")
+
+    # Strategy: curl with built-in retries first; if curl exhausts retries (e.g.
+    # transient Cloudflare R2 PoP outage lasting >2 min), fall back to Python
+    # requests with its own retry loop using a much longer window.
+    curl_err = None
     try:
         result = subprocess.run(
             ["curl", "-L",
-             "--max-time", "120",
+             "--max-time", "180",
              "--connect-timeout", "30",
-             "--retry", "3",
-             "--retry-delay", "5",
+             "--retry", "5",
+             "--retry-delay", "10",
+             "--retry-max-time", "300",
              "--retry-connrefused",
              "--silent", "--show-error",
              "-o", tmp.name, url],
-            capture_output=True, text=True, timeout=500
+            capture_output=True, text=True, timeout=700
         )
-        if result.returncode != 0:
-            sys.exit(f"Download failed: {result.stderr.strip()}")
+        if result.returncode == 0:
+            return tmp.name
+        curl_err = result.stderr.strip() or f"curl exit {result.returncode}"
+        print(f"  !  curl failed after retries ({curl_err}); falling back to requests")
     except FileNotFoundError:
-        # curl not available — fall back to requests
+        print("  !  curl not installed; using requests")
+    except subprocess.TimeoutExpired:
+        curl_err = "curl subprocess timed out"
+        print(f"  !  {curl_err}; falling back to requests")
+
+    # ── Python requests fallback with extended retry window ───────────────────
+    try:
         import requests as _req
-        r = _req.get(url, stream=True, timeout=120)
-        r.raise_for_status()
-        with open(tmp.name, "wb") as fh:
-            for chunk in r.iter_content(32768):
-                fh.write(chunk)
-    return tmp.name
+    except ImportError:
+        sys.exit(f"Download failed: {curl_err or 'no downloader available'}")
+
+    last_exc = None
+    for _attempt in range(1, 6):
+        try:
+            r = _req.get(url, stream=True, timeout=(30, 120))
+            r.raise_for_status()
+            with open(tmp.name, "wb") as fh:
+                for chunk in r.iter_content(32768):
+                    fh.write(chunk)
+            print(f"  ✓  fallback download succeeded on attempt {_attempt}")
+            return tmp.name
+        except Exception as e:
+            last_exc = e
+            print(f"  !  requests attempt {_attempt}/5 failed: {e}")
+            if _attempt < 5:
+                _time.sleep(15 * _attempt)   # 15, 30, 45, 60s backoff
+
+    sys.exit(f"Download failed after curl + 5 fallback attempts. "
+             f"curl: {curl_err}; requests: {last_exc}")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
