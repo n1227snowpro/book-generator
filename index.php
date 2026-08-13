@@ -167,7 +167,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WI
     $author   = trim($_POST['author']   ?? '');
     $subtitle = trim($_POST['subtitle'] ?? '');
     $gh_repo  = trim($_POST['gh_repo']  ?? '');
-    $no_bonus     = isset($_POST['no_bonus']) && $_POST['no_bonus'] === '1';
+    // Bonus type dropdown: "prayer" (default) | "affirmation" | "none"
+    $bonus_type = $_POST['bonus_type'] ?? 'prayer';
+    if (!in_array($bonus_type, ['prayer', 'affirmation', 'none'], true)) {
+        $bonus_type = 'prayer';
+    }
+    $no_bonus     = ($bonus_type === 'none');
     $no_toc       = isset($_POST['no_toc'])   && $_POST['no_toc']   === '1';
     $para_spacing = max(4, min(30, (int)($_POST['para_spacing'] ?? 14)));
 
@@ -261,6 +266,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WI
     }
     if ($no_bonus) {
         $cmd_parts[] = '--no-bonus';
+    } else {
+        $cmd_parts[] = '--bonus-type';
+        $cmd_parts[] = escapeshellarg($bonus_type);
     }
     if ($no_toc) {
         $cmd_parts[] = '--no-toc';
@@ -681,17 +689,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WI
         </div>
       </div>
 
-      <!-- Bonus Page Toggle -->
-      <div class="form-group" style="display:flex; align-items:center; gap:12px;">
-        <input type="hidden" id="bonus_toggle" name="no_bonus" value="0">
-        <div id="bonus-switch" style="
-            display:inline-block; width:44px; height:24px; background:#4a90d9;
-            border-radius:12px; position:relative; cursor:pointer; transition:background .2s; flex-shrink:0;">
-          <div id="bonus-knob" style="
-            position:absolute; top:3px; left:23px; width:18px; height:18px;
-            background:#fff; border-radius:50%; transition:left .2s;"></div>
-        </div>
-        <span style="font-size:0.95rem; cursor:pointer;" id="bonus-label">Include Bonus Page</span>
+      <!-- Bonus Page Selector -->
+      <div class="form-group">
+        <label for="bonus_type">Bonus Page</label>
+        <select id="bonus_type" name="bonus_type">
+          <option value="prayer" selected>Prayer (Daily Devotional)</option>
+          <option value="affirmation">Affirmation (Meditation App Promo)</option>
+          <option value="none">None</option>
+        </select>
       </div>
 
       <!-- TOC Toggle -->
@@ -780,20 +785,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_SERVER['HTTP_X_REQUESTED_WI
     }
   });
 
-  // ── Bonus toggle ───────────────────────────────────────────────────────────
-  let bonusEnabled = true;
-  function updateBonusUI() {
-    document.getElementById('bonus-switch').style.background = bonusEnabled ? '#4a90d9' : '#ccc';
-    document.getElementById('bonus-knob').style.left         = bonusEnabled ? '23px' : '3px';
-    document.getElementById('bonus_toggle').value            = bonusEnabled ? '0' : '1';
-  }
-  document.getElementById('bonus-switch').addEventListener('click', function() {
-    bonusEnabled = !bonusEnabled; updateBonusUI();
-  });
-  document.getElementById('bonus-label').addEventListener('click', function() {
-    bonusEnabled = !bonusEnabled; updateBonusUI();
-  });
-  updateBonusUI();
+  // ── Bonus page: native <select>, no JS needed ─────────────────────────────
 
   // ── TOC toggle ─────────────────────────────────────────────────────────────
   let tocEnabled = false;

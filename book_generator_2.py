@@ -747,7 +747,10 @@ _SUBHEAD_LABELS = re.compile(
 )
 
 # Default bonus page content (shown after copyright by default)
+# "type" is optional; when absent (or "prayer"), renderers use the classic
+# text-only layout.  Other values ("app_promo") select alternate layouts.
 DEFAULT_BONUS = {
+    "type": "prayer",
     "title": "Keep the Blessings Flowing Every Day",
     "paragraphs": [
         "Thank you so much for choosing this book!",
@@ -762,6 +765,26 @@ DEFAULT_BONUS = {
     "url":     "https://www.blessingflow.com/daily",
     "closing": "We are so grateful to walk alongside you, and we pray this extra gift brings "
                "even more abundant grace and peace to your daily life!",
+}
+
+# Affirmation bonus — an app-promo layout that mirrors page 3 of the
+# "Mindfulness, Meditation & Manifestation" reference PDF: heading, subheading,
+# body text + phone mockup image side-by-side, QR code, two footer lines.
+DEFAULT_BONUS_AFFIRMATION = {
+    "type":         "app_promo",
+    "heading":      "Want to take your meditation and mindfulness "
+                    "practice to the next level?",
+    "subheading":   "Download Manifesty App For Free",
+    "body":         "Download our free app and access a vast library of transformative guided "
+                    "meditation and relaxing music tracks. Elevate your daily practice and "
+                    "manifest your dreams with Manifesty. Scan the QR code below or go to "
+                    "https://findbalancetoday.com to download it and embark on your journey "
+                    "of self-discovery and fulfillment.",
+    "image":        "affirmation_phone.png",
+    "qr_image":     "affirmation_qr.png",
+    "url":          "https://findbalancetoday.com",
+    "footer_line1": "Scan the code or go to https://findbalancetoday.com",
+    "footer_line2": "To download our free meditation app",
 }
 
 THEME_ID = "th-" + str(uuid.uuid4())
@@ -969,7 +992,11 @@ def _build_bonus_page_epub(
     bonus: dict,
     decoration_epub_name: str | None,
 ) -> str:
-    """Build the bonus page XHTML body."""
+    """Build the bonus page XHTML body. Dispatches on bonus['type']."""
+    if bonus.get("type") == "app_promo":
+        return _build_bonus_page_epub_app_promo(bonus)
+
+    # Default: classic text-only "prayer" layout
     title = bonus.get("title", "Special Bonus")
     paragraphs = bonus.get("paragraphs", [])
     cta = bonus.get("cta", "")
@@ -1005,6 +1032,85 @@ def _build_bonus_page_epub(
         '</div></div></div>'
     )
     return _xhtml_page(title, body)
+
+
+def _img_to_data_uri(path: Path) -> str:
+    """Read an image file and return a base64 data URI (image/png)."""
+    import base64
+    with open(path, 'rb') as fh:
+        b64 = base64.b64encode(fh.read()).decode('ascii')
+    return f"data:image/png;base64,{b64}"
+
+
+def _build_bonus_page_epub_app_promo(bonus: dict) -> str:
+    """App-promo XHTML: heading, subheading, body+phone, QR, footer.
+
+    Images are inlined as data URIs so no extra manifest items are needed.
+    """
+    heading    = bonus.get("heading", "")
+    subheading = bonus.get("subheading", "")
+    body       = bonus.get("body", "")
+    url        = bonus.get("url", "")
+    image_name = bonus.get("image", "")
+    qr_name    = bonus.get("qr_image", "")
+    footer1    = bonus.get("footer_line1", "")
+    footer2    = bonus.get("footer_line2", "")
+
+    script_dir = Path(__file__).parent
+    phone_uri  = ""
+    qr_uri     = ""
+    if image_name and (script_dir / image_name).is_file():
+        phone_uri = _img_to_data_uri(script_dir / image_name)
+    if qr_name and (script_dir / qr_name).is_file():
+        qr_uri = _img_to_data_uri(script_dir / qr_name)
+
+    parts = []
+    if heading:
+        parts.append(f'<div class="align-center"><h2><b>{_xe(heading)}</b></h2></div>\n')
+    if subheading:
+        parts.append(f'<div class="align-center"><h3><b>{_xe(subheading)}</b></h3></div>\n')
+
+    # Body text with phone image floated right (EPUB-safe inline CSS)
+    if body:
+        img_html = ""
+        if phone_uri:
+            img_html = (
+                f'<img src="{phone_uri}" alt="app screenshot" '
+                f'style="float:right; width:40%; margin:0 0 0.5em 0.75em;"/>'
+            )
+        parts.append(f'<div><p>{img_html}{_xe(body)}</p></div>\n')
+        parts.append('<div style="clear:both;"></div>\n')
+
+    # QR code (centered, ~55% width so it stays prominent but fits on-page)
+    if qr_uri:
+        parts.append(
+            f'<div class="align-center" style="margin-top:1em;">'
+            f'<img src="{qr_uri}" alt="QR code" style="width:55%; max-width:2.5in;"/>'
+            f'</div>\n'
+        )
+
+    # Footer lines — line 1 may contain the URL; render as clickable link
+    if footer1:
+        if url and url in footer1:
+            pre, _, post = footer1.partition(url)
+            footer1_html = (f'{_xe(pre)}'
+                            f'<a target="_blank" href="{_xe(url)}">{_xe(url)}</a>'
+                            f'{_xe(post)}')
+        else:
+            footer1_html = _xe(footer1)
+        parts.append(f'<div class="align-center" style="margin-top:0.75em;">'
+                     f'<p>{footer1_html}</p></div>\n')
+    if footer2:
+        parts.append(f'<div class="align-center"><p>{_xe(footer2)}</p></div>\n')
+
+    body_html = _wrap(
+        '    <div class="chapter">'
+        '<div class="chapter-body">'
+        '<div class="wrapper">'
+        + "".join(parts) +
+        '</div></div></div>'
+    )
+    return _xhtml_page(heading or "Special Bonus", body_html)
 
 
 def build_epub(
@@ -1428,9 +1534,12 @@ def build_paperback_pdf(
         return items
 
     def _bonus_page_story() -> list:
-        """Build the bonus page story elements."""
+        """Build the bonus page story elements. Dispatches on bonus['type']."""
         if not bonus:
             return []
+        if bonus.get("type") == "app_promo":
+            return _bonus_page_story_app_promo()
+        # Default: classic text-only "prayer" layout
         items = [Spacer(1, 0.5 * inch)]
         items += _make_decoration_flowable(decoration_path)
         bonus_title = bonus.get("title", "Special Bonus")
@@ -1451,6 +1560,78 @@ def build_paperback_pdf(
         if closing:
             items.append(Spacer(1, 0.4 * inch))
             items.append(Paragraph(_xe(closing), s_center))
+        items.append(PageBreak())
+        return items
+
+    def _bonus_page_story_app_promo() -> list:
+        """App-promo layout: heading, subheading, body+phone-image row, QR, footer."""
+        usable_w = PAGE_W - L_INNER - L_OUTER
+        heading    = bonus.get("heading", "")
+        subheading = bonus.get("subheading", "")
+        body       = bonus.get("body", "")
+        url        = bonus.get("url", "")
+        image_name = bonus.get("image", "")
+        qr_name    = bonus.get("qr_image", "")
+        footer1    = bonus.get("footer_line1", "")
+        footer2    = bonus.get("footer_line2", "")
+
+        # Resolve asset paths relative to this script's directory
+        script_dir = Path(__file__).parent
+        phone_path = script_dir / image_name if image_name else None
+        qr_path    = script_dir / qr_name    if qr_name    else None
+
+        items = [Spacer(1, 0.35 * inch)]
+        if heading:
+            items.append(Paragraph(f"<b>{_xe(heading)}</b>", s_center_bold))
+            items.append(Spacer(1, 0.12 * inch))
+        if subheading:
+            items.append(Paragraph(f"<b>{_xe(subheading)}</b>", s_center_bold))
+            items.append(Spacer(1, 0.3 * inch))
+
+        # Body text + phone image side-by-side using a Table
+        if body and phone_path and phone_path.is_file():
+            phone_w = usable_w * 0.42
+            phone_h = phone_w * 1.15   # portrait aspect (approx from source 968x1149)
+            phone_img = Image(str(phone_path), width=phone_w, height=phone_h)
+            body_para = Paragraph(_xe(body), s_body)
+            row = Table(
+                [[body_para, phone_img]],
+                colWidths=[usable_w * 0.55, usable_w * 0.45],
+            )
+            row.setStyle(TableStyle([
+                ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+                ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+                ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+                ('TOPPADDING',    (0, 0), (-1, -1), 0),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+            ]))
+            items.append(row)
+        elif body:
+            items.append(Paragraph(_xe(body), s_body))
+        items.append(Spacer(1, 0.35 * inch))
+
+        # QR code — centered, ~2.5" square
+        if qr_path and qr_path.is_file():
+            qr_size = 2.5 * inch
+            qr_img = Image(str(qr_path), width=qr_size, height=qr_size)
+            qr_img.hAlign = 'CENTER'
+            items.append(qr_img)
+            items.append(Spacer(1, 0.25 * inch))
+
+        # Footer lines — line 1 with clickable URL if present
+        if footer1:
+            if url and url in footer1:
+                # Wrap the URL substring in a <link>
+                pre, _, post = footer1.partition(url)
+                markup = (f"{_xe(pre)}"
+                          f'<link href="{_xe(url)}"><font color="#0066cc">{_xe(url)}</font></link>'
+                          f"{_xe(post)}")
+                items.append(Paragraph(markup, s_center))
+            else:
+                items.append(Paragraph(_xe(footer1), s_center))
+            items.append(Spacer(1, 0.08 * inch))
+        if footer2:
+            items.append(Paragraph(_xe(footer2), s_center))
         items.append(PageBreak())
         return items
 
@@ -1749,7 +1930,11 @@ def main():
     parser.add_argument("--para-spacing", type=int, default=14,
                         help="Space after each body paragraph in points (default: 14)")
     parser.add_argument("--no-bonus",  action="store_true",
-                        help="Omit the bonus page entirely")
+                        help="Omit the bonus page entirely (alias for --bonus-type none)")
+    parser.add_argument("--bonus-type", choices=["prayer", "affirmation", "none"],
+                        default="prayer",
+                        help="Which built-in bonus page to include (default: prayer). "
+                             "Ignored when --bonus-json is used.")
     parser.add_argument("--no-toc",    action="store_true",
                         help="Omit the Table of Contents page from the PDF")
     args = parser.parse_args()
@@ -1770,10 +1955,10 @@ def main():
     safe = re.sub(r"[/\\]", "", args.title)
     safe = re.sub(r"[^\w\-. ]", "_", safe).strip("_").replace(" ", "_")
 
-    # Load bonus page: custom JSON > default content > disabled
+    # Load bonus page: custom JSON > --bonus-type > default (prayer) > disabled
     bonus = None
-    if args.no_bonus:
-        print("  i  Bonus page disabled (--no-bonus)")
+    if args.no_bonus or args.bonus_type == "none":
+        print("  i  Bonus page disabled")
     elif args.bonus_json:
         if not os.path.isfile(args.bonus_json):
             print(f"  !  Bonus JSON not found: {args.bonus_json} — using default bonus page")
@@ -1781,10 +1966,13 @@ def main():
         else:
             with open(args.bonus_json, "r", encoding="utf-8") as f:
                 bonus = json.load(f)
-            print(f"  i  Bonus page (custom): {bonus.get('title', '(untitled)')}")
+            print(f"  i  Bonus page (custom): {bonus.get('title', bonus.get('heading', '(untitled)'))}")
+    elif args.bonus_type == "affirmation":
+        bonus = DEFAULT_BONUS_AFFIRMATION
+        print(f"  i  Bonus page (affirmation): {bonus['heading']}")
     else:
         bonus = DEFAULT_BONUS
-        print(f"  i  Bonus page (default): {bonus['title']}")
+        print(f"  i  Bonus page (prayer): {bonus['title']}")
 
     # Auto-discover decoration.png next to the script if --decoration not given
     decoration = args.decoration

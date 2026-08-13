@@ -10,7 +10,9 @@
 //    "subtitle":   "An Optional Subtitle",
 //    "author":     "Author Name",
 //    "book_url":   "https://...",
-//    "bonus":      true          // optional, default true
+//    "bonus":      true,             // optional, default true — false = no bonus
+//    "bonus_type": "prayer",         // optional: "prayer" (default) | "affirmation"
+//    "toc":        false             // optional, default false — true = include TOC
 //  }
 //  Response: { "job_id": "wh_...", "status": "processing", "poll_url": "..." }
 //
@@ -84,6 +86,13 @@ $title      = trim($data['title']      ?? '');
 $author     = trim($data['author']     ?? '');
 $subtitle   = trim($data['subtitle']   ?? '');
 $no_bonus   = isset($data['bonus']) && $data['bonus'] === false;
+// Bonus type: "prayer" (default, backward compatible) or "affirmation".
+// Ignored when bonus is disabled via "bonus": false.
+$bonus_type = 'prayer';
+if (isset($data['bonus_type'])
+    && in_array($data['bonus_type'], ['prayer', 'affirmation'], true)) {
+    $bonus_type = $data['bonus_type'];
+}
 // TOC is opt-in: only include when caller explicitly sends "toc": true.
 // Omitting the field (or sending false) keeps existing integrations unaffected.
 $no_toc     = !(isset($data['toc']) && $data['toc'] === true);
@@ -137,6 +146,9 @@ if (!empty($subtitle)) {
 }
 if ($no_bonus) {
     $cmd_parts[] = '--no-bonus';
+} else {
+    $cmd_parts[] = '--bonus-type';
+    $cmd_parts[] = escapeshellarg($bonus_type);
 }
 if ($no_toc) {
     $cmd_parts[] = '--no-toc';
