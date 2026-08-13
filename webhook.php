@@ -12,7 +12,9 @@
 //    "book_url":   "https://...",
 //    "bonus":      true,             // optional, default true — false = no bonus
 //    "bonus_type": "prayer",         // optional: "prayer" (default) | "affirmation"
-//    "toc":        false             // optional, default false — true = include TOC
+//    "toc":        false,            // optional, default false — true = include TOC
+//    "para_spacing": 14              // optional, default 14 — points after each
+//                                    // body paragraph (4-30; smaller = tighter)
 //  }
 //  Response: { "job_id": "wh_...", "status": "processing", "poll_url": "..." }
 //
@@ -96,6 +98,12 @@ if (isset($data['bonus_type'])
 // TOC is opt-in: only include when caller explicitly sends "toc": true.
 // Omitting the field (or sending false) keeps existing integrations unaffected.
 $no_toc     = !(isset($data['toc']) && $data['toc'] === true);
+// Paragraph spacing (points after each body paragraph): 4-30, default 14.
+// Only sent to the generator when explicitly set to avoid overriding the default.
+$para_spacing = null;
+if (isset($data['para_spacing']) && is_numeric($data['para_spacing'])) {
+    $para_spacing = max(4, min(30, (int)$data['para_spacing']));
+}
 $book_url   = trim($data['book_url']   ?? '');
 
 if (empty($project_id)) json_err(400, 'Missing required field: project_id.');
@@ -152,6 +160,10 @@ if ($no_bonus) {
 }
 if ($no_toc) {
     $cmd_parts[] = '--no-toc';
+}
+if ($para_spacing !== null) {
+    $cmd_parts[] = '--para-spacing';
+    $cmd_parts[] = escapeshellarg((string)$para_spacing);
 }
 
 // ── Write a runner script into the job dir, then exec it ─────────────────────
