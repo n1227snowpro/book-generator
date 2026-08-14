@@ -40,5 +40,5 @@ define('WEBHOOK_SECRET',    '');
 define('SERVER_BASE_URL',   '');
 
 // How long (in hours) to keep generated files before they expire.
-// 168 = 7 days.
-define('FILE_TTL_HOURS',    168);
+// 336 = 14 days.
+define('FILE_TTL_HOURS',    336);
