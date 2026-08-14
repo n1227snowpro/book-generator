@@ -11,8 +11,13 @@ define('PYTHON_BIN',        '/usr/bin/python3');
 // Path to book_generator_2.py on the server
 define('GENERATOR_SCRIPT',  __DIR__ . '/book_generator_2.py');
 
-// Temp directory for uploads and generated files (must be writable)
-define('TMP_BASE',          sys_get_temp_dir() . '/book_gen');
+// Directory for uploads and generated files (must be writable by the web user).
+// IMPORTANT: do NOT use sys_get_temp_dir()/anything under /tmp on servers where
+// Apache runs with PrivateTmp=yes — the whole tree is destroyed on every
+// Apache restart, which will wipe every download link. Use a persistent
+// location like /var/lib/book_gen instead. Create with:
+//     sudo mkdir -p /var/lib/book_gen && sudo chown www-data:www-data /var/lib/book_gen
+define('TMP_BASE',          '/var/lib/book_gen');
 
 // GitHub Personal Access Token (needs 'repo' scope)
 // Create at: https://github.com/settings/tokens
@@ -35,4 +40,5 @@ define('WEBHOOK_SECRET',    '');
 define('SERVER_BASE_URL',   '');
 
 // How long (in hours) to keep generated files before they expire.
-define('FILE_TTL_HOURS',    24);
+// 168 = 7 days.
+define('FILE_TTL_HOURS',    168);
