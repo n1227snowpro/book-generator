@@ -1009,10 +1009,11 @@ def _build_bonus_page_epub(
     bonus: dict,
     decoration_epub_name: str | None,
     phone_epub_name: str | None = None,
+    qr_epub_name: str | None = None,
 ) -> str:
     """Build the bonus page XHTML body. Dispatches on bonus['type']."""
     if bonus.get("type") == "app_promo":
-        return _build_bonus_page_epub_app_promo(bonus, phone_epub_name)
+        return _build_bonus_page_epub_app_promo(bonus, phone_epub_name, qr_epub_name)
 
     # Default: classic text-only "prayer" layout
     title = bonus.get("title", "Special Bonus")
@@ -1053,20 +1054,14 @@ def _build_bonus_page_epub(
 
 
 def _build_bonus_page_epub_app_promo(bonus: dict,
-                                     phone_epub_name: str | None) -> str:
-    """App-promo XHTML: heading, subheading, body+phone, footer.
+                                     phone_epub_name: str | None,
+                                     qr_epub_name: str | None = None) -> str:
+    """App-promo XHTML: heading, subheading, body+phone, QR, footer.
 
-    The QR code is intentionally NOT embedded in the EPUB even when the bonus
-    dict provides `qr_image` — Kindle's converter rejected EPUBs that embedded
-    both the phone mockup and a QR code with "internal error". The URL still
-    appears in the footer (and inline in the body) so readers can reach the
-    same destination.
-
-    The phone image is referenced by its filename inside the OEBPS/images/
-    directory (added to the EPUB manifest by build_epub). Referencing images
-    by filename rather than base64 data URI is required for Kindle conversion
-    to succeed — data: URIs cause "Kindle conversion has encountered an
-    internal error".
+    Images are referenced by filename (images/{name}) — added to the EPUB
+    manifest by build_epub. Referencing images by filename rather than base64
+    data URI is required for Kindle conversion to succeed; data: URIs cause
+    "Kindle conversion has encountered an internal error".
     """
     heading    = bonus.get("heading", "")
     subheading = bonus.get("subheading", "")
@@ -1074,14 +1069,6 @@ def _build_bonus_page_epub_app_promo(bonus: dict,
     url        = bonus.get("url", "")
     footer1    = bonus.get("footer_line1", "")
     footer2    = bonus.get("footer_line2", "")
-
-    # Rewrite copy that assumes a QR is on the page, since the EPUB has none.
-    # Body: "Scan the QR code below or go to <URL>" → "Visit <URL>"
-    if body:
-        body = re.sub(r'Scan the QR code below or go to\s+', 'Visit ', body)
-    # Footer: "Scan the code or go to <URL>" → "Visit <URL>"
-    if footer1:
-        footer1 = re.sub(r'Scan the code or go to\s+', 'Visit ', footer1)
 
     parts = []
     if heading:
@@ -1099,6 +1086,15 @@ def _build_bonus_page_epub_app_promo(bonus: dict,
             )
         parts.append(f'<div><p>{img_html}{_xe(body)}</p></div>\n')
         parts.append('<div style="clear:both;"></div>\n')
+
+    # QR code — centered, ~55% width so it stays prominent but fits on-page
+    if qr_epub_name:
+        parts.append(
+            f'<div class="align-center" style="margin-top:1em;">'
+            f'<img src="images/{qr_epub_name}" alt="QR code"'
+            f' style="width:55%; max-width:2.5in;"/>'
+            f'</div>\n'
+        )
 
     # Footer lines — line 1 may contain the URL; render as clickable link
     if footer1:
@@ -1165,12 +1161,15 @@ def build_epub(
     title_html = _xhtml_page("Title Page", title_body)
 
     # ── Bonus page ────────────────────────────────────────────────────────────
-    # For app_promo bonuses, resolve the phone-image asset up front so we can
-    # add it to the manifest AND ship the file bytes inside the EPUB ZIP.
-    # (Data-URI images break Kindle conversion — must reference by filename.)
+    # For app_promo bonuses, resolve the phone-image and QR-code assets up
+    # front so we can add them to the manifest AND ship the file bytes inside
+    # the EPUB ZIP. Data-URI images break Kindle conversion — must reference
+    # by filename.
     bonus_html = None
     phone_epub_name = None
     phone_bytes     = None
+    qr_epub_name    = None
+    qr_bytes        = None
     if bonus:
         if bonus.get("type") == "app_promo":
             _image = bonus.get("image", "")
@@ -1179,8 +1178,16 @@ def build_epub(
                 phone_epub_name = _img_path.name
                 with open(_img_path, "rb") as _f:
                     phone_bytes = _f.read()
-                print(f"  i  Bonus image (app_promo): {_img_path}")
-        bonus_html = _build_bonus_page_epub(bonus, decor_name, phone_epub_name)
+                print(f"  i  Bonus image (app_promo phone): {_img_path}")
+            _qr = bonus.get("qr_image", "")
+            _qr_path = (SCRIPT_DIR / _qr) if _qr else None
+            if _qr_path and _qr_path.is_file():
+                qr_epub_name = _qr_path.name
+                with open(_qr_path, "rb") as _f:
+                    qr_bytes = _f.read()
+                print(f"  i  Bonus image (app_promo QR):    {_qr_path}")
+        bonus_html = _build_bonus_page_epub(bonus, decor_name,
+                                            phone_epub_name, qr_epub_name)
 
     # ── Copyright page ────────────────────────────────────────────────────────
     copy_body = _wrap(
@@ -1287,6 +1294,12 @@ def build_epub(
         mime = ext_to_mime.get(Path(phone_epub_name).suffix.lower(), "image/png")
         manifest_lines.append(
             f'        <item id="image_bonus_phone" href="images/{phone_epub_name}"'
+            f' media-type="{mime}"/>'
+        )
+    if qr_epub_name:
+        mime = ext_to_mime.get(Path(qr_epub_name).suffix.lower(), "image/png")
+        manifest_lines.append(
+            f'        <item id="image_bonus_qr" href="images/{qr_epub_name}"'
             f' media-type="{mime}"/>'
         )
 
@@ -1405,6 +1418,9 @@ def build_epub(
         # Bonus phone image (app_promo layout)
         if phone_epub_name and phone_bytes:
             zf.writestr(f"OEBPS/images/{phone_epub_name}", phone_bytes)
+        # Bonus QR code image (app_promo layout)
+        if qr_epub_name and qr_bytes:
+            zf.writestr(f"OEBPS/images/{qr_epub_name}", qr_bytes)
         # Fonts — only the files that were resolved above (matches manifest)
         for _name, _fp in _font_files:
             zf.write(str(_fp), f"OEBPS/fonts/{_name}")
