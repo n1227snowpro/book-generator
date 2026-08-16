@@ -782,9 +782,11 @@ DEFAULT_BONUS = {
                "even more abundant grace and peace to your daily life!",
 }
 
-# Affirmation bonus — an app-promo layout that mirrors page 3 of the
-# "Mindfulness, Meditation & Manifestation" reference PDF: heading, subheading,
-# body text + phone mockup image side-by-side, QR code, two footer lines.
+# Affirmation bonus — app-promo layout mirroring page 3 of the reference PDF.
+# The QR code is used in the PDF only. The EPUB renderer intentionally skips
+# it and rewrites the body text to drop the "Scan the QR code" phrasing —
+# Kindle's converter rejected EPUBs that embedded both the phone mockup and
+# the QR code with "internal error".
 DEFAULT_BONUS_AFFIRMATION = {
     "type":         "app_promo",
     "heading":      "Want to take your meditation and mindfulness "
@@ -1058,26 +1060,34 @@ def _img_to_data_uri(path: Path) -> str:
 
 
 def _build_bonus_page_epub_app_promo(bonus: dict) -> str:
-    """App-promo XHTML: heading, subheading, body+phone, QR, footer.
+    """App-promo XHTML: heading, subheading, body+phone, footer.
 
-    Images are inlined as data URIs so no extra manifest items are needed.
+    The QR code is intentionally NOT embedded in the EPUB even when the bonus
+    dict provides `qr_image` — Kindle's converter rejected EPUBs that embedded
+    both the phone mockup and a QR code with "internal error". The URL still
+    appears in the footer (and inline in the body) so readers can reach the
+    same destination.
     """
     heading    = bonus.get("heading", "")
     subheading = bonus.get("subheading", "")
     body       = bonus.get("body", "")
     url        = bonus.get("url", "")
     image_name = bonus.get("image", "")
-    qr_name    = bonus.get("qr_image", "")
     footer1    = bonus.get("footer_line1", "")
     footer2    = bonus.get("footer_line2", "")
 
+    # Rewrite copy that assumes a QR is on the page, since the EPUB has none.
+    # Body: "Scan the QR code below or go to <URL>" → "Visit <URL>"
+    if body:
+        body = re.sub(r'Scan the QR code below or go to\s+', 'Visit ', body)
+    # Footer: "Scan the code or go to <URL>" → "Visit <URL>"
+    if footer1:
+        footer1 = re.sub(r'Scan the code or go to\s+', 'Visit ', footer1)
+
     script_dir = Path(__file__).parent
     phone_uri  = ""
-    qr_uri     = ""
     if image_name and (script_dir / image_name).is_file():
         phone_uri = _img_to_data_uri(script_dir / image_name)
-    if qr_name and (script_dir / qr_name).is_file():
-        qr_uri = _img_to_data_uri(script_dir / qr_name)
 
     parts = []
     if heading:
@@ -1095,14 +1105,6 @@ def _build_bonus_page_epub_app_promo(bonus: dict) -> str:
             )
         parts.append(f'<div><p>{img_html}{_xe(body)}</p></div>\n')
         parts.append('<div style="clear:both;"></div>\n')
-
-    # QR code (centered, ~55% width so it stays prominent but fits on-page)
-    if qr_uri:
-        parts.append(
-            f'<div class="align-center" style="margin-top:1em;">'
-            f'<img src="{qr_uri}" alt="QR code" style="width:55%; max-width:2.5in;"/>'
-            f'</div>\n'
-        )
 
     # Footer lines — line 1 may contain the URL; render as clickable link
     if footer1:
