@@ -70,11 +70,10 @@ DECOR_PDF_WIDTH = 2.2 * inch
 # 0.  FONT REGISTRATION
 # ══════════════════════════════════════════════════════════════════════════════
 
-def register_fonts(fonts_dir: str | None = None) -> tuple[str, str, str, str]:
+def _font_search_paths(fonts_dir: str | Path | None = None) -> list[Path]:
+    """Directories to look in for bundled TTF fonts, most-specific first."""
     fdir = Path(fonts_dir) if fonts_dir else SCRIPT_DIR
-
-    # Search paths for each required font (custom dir first, then system locations)
-    _SEARCH = [
+    return [
         fdir,
         # macOS
         Path.home() / "Library/Fonts/BookFonts",
@@ -87,12 +86,28 @@ def register_fonts(fonts_dir: str | None = None) -> tuple[str, str, str, str]:
         Path("/usr/share/fonts/BookFonts"),
     ]
 
-    def _find(name: str) -> Path | None:
-        for d in _SEARCH:
-            p = d / name
-            if p.exists():
+
+def find_font_file(name: str, fonts_dir: str | Path | None = None) -> Path | None:
+    """Locate a TTF font file across the standard search paths.
+
+    Returns None if the file is missing OR is a zero-byte placeholder — bundling
+    an empty .ttf into an EPUB causes Kindle conversion to fail.
+    """
+    for d in _font_search_paths(fonts_dir):
+        p = d / name
+        try:
+            if p.is_file() and p.stat().st_size > 0:
                 return p
-        return None
+        except OSError:
+            continue
+    return None
+
+
+def register_fonts(fonts_dir: str | None = None) -> tuple[str, str, str, str]:
+    fdir = Path(fonts_dir) if fonts_dir else SCRIPT_DIR
+
+    def _find(name: str) -> Path | None:
+        return find_font_file(name, fdir)
 
     aldrich_path         = _find("Aldrich-Regular.ttf")
     alegreya_path        = _find("Alegreya-Regular.ttf")
@@ -1232,12 +1247,24 @@ def build_epub(
     for i, (fname, _) in enumerate(ch_files):
         all_items.append((f'ch{i}', fname))
 
+    # Resolve font files up front — only declare items in the manifest for
+    # fonts that actually exist and will be bundled. Declaring a manifest
+    # item without shipping the file causes Kindle conversion errors.
+    _font_files: list[tuple[str, Path]] = []
+    for _name in ("Aldrich-Regular.ttf", "Alegreya-Regular.ttf"):
+        _fp = find_font_file(_name, fonts_dir)
+        if _fp is not None and _fp.is_file():
+            _font_files.append((_name, _fp))
+
     manifest_lines = [
         '        <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>',
         '        <item id="css" href="style.css" media-type="text/css"/>',
-        '        <item id="font0" href="fonts/Aldrich-Regular.ttf" media-type="application/x-font-ttf"/>',
-        '        <item id="font1" href="fonts/Alegreya-Regular.ttf" media-type="application/x-font-ttf"/>',
     ]
+    for _idx, (_name, _) in enumerate(_font_files):
+        manifest_lines.append(
+            f'        <item id="font{_idx}" href="fonts/{_name}"'
+            f' media-type="application/x-font-ttf"/>'
+        )
     if decor_name:
         ext_to_mime = {".png": "image/png", ".jpg": "image/jpeg",
                        ".jpeg": "image/jpeg", ".gif": "image/gif",
@@ -1359,11 +1386,9 @@ def build_epub(
         # Decoration image
         if decor_name and decor_bytes:
             zf.writestr(f"OEBPS/images/{decor_name}", decor_bytes)
-        # Fonts
-        for font_name in ("Aldrich-Regular.ttf", "Alegreya-Regular.ttf"):
-            fp = fdir / font_name
-            if fp.exists():
-                zf.write(str(fp), f"OEBPS/fonts/{font_name}")
+        # Fonts — only the files that were resolved above (matches manifest)
+        for _name, _fp in _font_files:
+            zf.write(str(_fp), f"OEBPS/fonts/{_name}")
 
     print(f"  OK  EPUB  ->  {output_path}")
 
