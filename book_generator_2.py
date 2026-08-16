@@ -1295,13 +1295,14 @@ def build_epub(
         f'    <dc:identifier id="BookId">{book_id}</dc:identifier>\n'
         f'    <dc:title>{_xe(title)}</dc:title>\n'
         f'    <dc:creator id="creator">{_xe(author)}</dc:creator>\n'
-        f'    <dc:description>{_xe(subtitle)}</dc:description>\n'
+        # dc:description is optional; only emit when subtitle is non-empty.
+        # An empty <dc:description/> fails EPUB validation and blocks KDP conversion.
+        + (f'    <dc:description>{_xe(subtitle)}</dc:description>\n' if subtitle and subtitle.strip() else '') +
         '    <dc:language>en</dc:language>\n'
         f'    <dc:date>{today}</dc:date>\n'
         '    <dc:rights>All rights reserved</dc:rights>\n'
         f'    <meta property="dcterms:modified">{today}T00:00:00Z</meta>\n'
         '    <meta name="generator" content="BookGenerator"/>\n'
-        '    <meta property="ibooks:specified-fonts">true</meta>\n'
         '  </metadata>\n'
         '  <manifest>\n'
         + "\n".join(manifest_lines) + "\n"
