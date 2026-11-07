@@ -165,6 +165,24 @@ if ($para_spacing !== null) {
     $cmd_parts[] = '--para-spacing';
     $cmd_parts[] = escapeshellarg((string)$para_spacing);
 }
+// Keep a copy of the source DOCX in the job dir so the MCP edit/rebuild
+// tools can re-use it. Purely additive — status.json unchanged.
+$source_path = $job_dir . '/source.docx';
+$cmd_parts[] = '--save-source-to';
+$cmd_parts[] = escapeshellarg($source_path);
+
+// Save the input settings so rebuild_job can reproduce them.
+file_put_contents($job_dir . '/job.json', json_encode([
+    'project_id'   => $project_id,
+    'title'        => $title,
+    'subtitle'     => $subtitle,
+    'author'       => $author,
+    'book_url'     => $book_url,
+    'bonus_type'   => $no_bonus ? 'none' : $bonus_type,
+    'include_toc'  => !$no_toc,
+    'para_spacing' => $para_spacing,
+    'created_at'   => gmdate('c'),
+], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
 
 // ── Write a runner script into the job dir, then exec it ─────────────────────
 // Why a file instead of a one-liner?  On Ubuntu, Apache uses PrivateTmp, so

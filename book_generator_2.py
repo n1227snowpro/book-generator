@@ -1997,6 +1997,9 @@ def main():
                              "Ignored when --bonus-json is used.")
     parser.add_argument("--no-toc",    action="store_true",
                         help="Omit the Table of Contents page from the PDF")
+    parser.add_argument("--save-source-to", default=None,
+                        help="After downloading, also copy the source DOCX here "
+                             "so MCP edit/rebuild tools can re-use it.")
     args = parser.parse_args()
 
     _tmp_download = None
@@ -2008,6 +2011,15 @@ def main():
         print(f"  i  Saved to temp: {input_path}")
     elif not os.path.isfile(input_path):
         sys.exit(f"File not found: {input_path}")
+
+    if args.save_source_to:
+        try:
+            import shutil as _shutil
+            os.makedirs(os.path.dirname(args.save_source_to) or ".", exist_ok=True)
+            _shutil.copy(input_path, args.save_source_to)
+            print(f"  i  Source copy saved: {args.save_source_to}")
+        except Exception as _e:
+            print(f"  !  Could not save source copy: {_e}")
 
     out_dir   = args.out_dir or os.path.dirname(os.path.abspath(input_path))
     fonts_dir = args.fonts_dir or str(SCRIPT_DIR)
