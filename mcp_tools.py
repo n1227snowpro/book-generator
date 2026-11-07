@@ -254,7 +254,7 @@ def _require_docx(job_dir: Path) -> Path:
     if not src.is_file():
         raise RuntimeError(
             "This job has no source.docx (likely created before MCP source storage). "
-            "Re-run the book via generate_book to enable edits."
+            "Re-run the book via generate_book or run import_source to enable edits."
         )
     return src
 
@@ -271,27 +271,118 @@ def _entry_range_in_docx(src: Path, month: str, day_num: int) -> tuple[int, int]
 def _remove_paragraphs(src: Path, first_idx: int, last_idx: int) -> None:
     from docx import Document
     doc = Document(str(src))
-    # python-docx doesn't expose a clean remove; use the underlying XML.
     for p in list(doc.paragraphs)[first_idx:last_idx + 1]:
         p._element.getparent().remove(p._element)
     doc.save(str(src))
 
-def _append_paragraph_after(doc_para, text: str, bold: bool = False, italic: bool = False):
-    """Insert a new paragraph after doc_para with a single run."""
+# ── Run/segment helpers ───────────────────────────────────────────────────────
+def _qn(tag: str):
     from docx.oxml.ns import qn
+    return qn(tag)
+
+def _extract_segments(para):
+    """Flatten a paragraph into [(kind, text, bold, italic)] slots.
+    kind in {'text','break'}. Breaks represent <w:br/> (line breaks within the para)."""
+    out = []
+    W_R, W_T, W_BR, W_TAB, W_RPR, W_B, W_I = (
+        _qn('w:r'), _qn('w:t'), _qn('w:br'), _qn('w:tab'),
+        _qn('w:rPr'), _qn('w:b'), _qn('w:i'))
+    for r in para._element.findall(W_R):
+        rPr = r.find(W_RPR)
+        bold = rPr is not None and rPr.find(W_B) is not None
+        italic = rPr is not None and rPr.find(W_I) is not None
+        for child in r:
+            if child.tag == W_T:
+                out.append(('text', child.text or '', bold, italic))
+            elif child.tag == W_BR:
+                out.append(('break', '\n', False, False))
+            elif child.tag == W_TAB:
+                out.append(('text', '\t', bold, italic))
+    return out
+
+def _segments_text(segments):
+    return ''.join(s[1] for s in segments)
+
+def _write_segments(para, segments):
+    """Replace all <w:r> in para with runs rebuilt from segments. Keep <w:pPr>."""
+    from docx.oxml import OxmlElement
+    for r in list(para._element.findall(_qn('w:r'))):
+        para._element.remove(r)
+    for kind, text, bold, italic in segments:
+        r = OxmlElement('w:r')
+        if bold or italic:
+            rPr = OxmlElement('w:rPr')
+            if bold:   rPr.append(OxmlElement('w:b'))
+            if italic: rPr.append(OxmlElement('w:i'))
+            r.append(rPr)
+        if kind == 'break':
+            r.append(OxmlElement('w:br'))
+        else:
+            t = OxmlElement('w:t')
+            t.text = text
+            t.set(_qn('xml:space'), 'preserve')
+            r.append(t)
+        para._element.append(r)
+
+# ── Markdown → runs (**bold**, *italic*, \n → <w:br/>) ────────────────────────
+_MD_TOKEN = re.compile(r'(\*\*\*.+?\*\*\*|\*\*.+?\*\*|\*[^*\n]+\*)')
+
+def _parse_markdown_runs(text: str) -> list[tuple[str, bool, bool]]:
+    """Return [(text, bold, italic)] by parsing **bold**, *italic*, ***both***."""
+    out = []
+    pos = 0
+    for m in _MD_TOKEN.finditer(text):
+        if m.start() > pos:
+            out.append((text[pos:m.start()], False, False))
+        tok = m.group(1)
+        if tok.startswith('***'):
+            out.append((tok[3:-3], True, True))
+        elif tok.startswith('**'):
+            out.append((tok[2:-2], True, False))
+        else:
+            out.append((tok[1:-1], False, True))
+        pos = m.end()
+    if pos < len(text):
+        out.append((text[pos:], False, False))
+    return out
+
+def _render_markdown_into(para, text: str) -> None:
+    """Replace runs in para with markdown-parsed content. \n → <w:br/>."""
+    segments = []
+    lines = text.split('\n')
+    for i, line in enumerate(lines):
+        for seg_text, bold, italic in _parse_markdown_runs(line):
+            if seg_text:
+                segments.append(('text', seg_text, bold, italic))
+        if i < len(lines) - 1:
+            segments.append(('break', '\n', False, False))
+    _write_segments(para, segments)
+
+def _append_empty_like(after_p, style_src=None):
+    """Insert an empty paragraph after after_p. If style_src given, copy its <w:pPr>;
+    otherwise inherit after_p's <w:pPr>."""
     from copy import deepcopy
-    new_p = deepcopy(doc_para._element)
-    # Strip children (keep pPr for style inheritance)
-    for child in list(new_p):
-        if child.tag != qn('w:pPr'):
-            new_p.remove(child)
-    doc_para._element.addnext(new_p)
     from docx.text.paragraph import Paragraph
-    para = Paragraph(new_p, doc_para._parent)
-    run = para.add_run(text)
-    run.bold = bool(bold)
-    run.italic = bool(italic)
-    return para
+    src_elem = (style_src._element if style_src is not None else after_p._element)
+    new_p = deepcopy(src_elem)
+    for child in list(new_p):
+        if child.tag != _qn('w:pPr'):
+            new_p.remove(child)
+    after_p._element.addnext(new_p)
+    return Paragraph(new_p, after_p._parent)
+
+# ── Junk-marker finder (for truncate_junk) ────────────────────────────────────
+_TRUNC_JUNK_RE = re.compile(
+    r'(?P<json_cont>",\s*"[^"\n]{0,80}"\s*:)'
+    r'|(?P<json_open>\{\s*"document")'
+    r'|(?P<wait>\bWait,\s*(?:I|let me)\b)'
+    r'|(?P<corr>\bCorrection\s*[—-])'
+    r'|(?P<note>\bNote:\s*Due to formatting\b)'
+)
+
+def _first_junk_position(text: str) -> int | None:
+    m = _TRUNC_JUNK_RE.search(text)
+    return m.start() if m else None
 
 def cmd_repair(job_dir: Path, day: str, action: str, payload: dict) -> dict:
     src = _require_docx(job_dir)
@@ -306,21 +397,84 @@ def cmd_repair(job_dir: Path, day: str, action: str, payload: dict) -> dict:
         return {"ok": True, "action": "delete", "paragraphs_removed": last - first + 1}
 
     if action == "truncate_junk":
-        # Find first paragraph inside the entry that contains a junk marker;
-        # keep everything before it (the first clean copy). If no junk, no-op.
         from docx import Document
         doc = Document(str(src))
-        cut_at = None
-        for i in range(first, last + 1):
-            if _find_junk(doc.paragraphs[i].text or ""):
-                cut_at = i
+        # Walk every body paragraph as a flat segment stream; find first junk char.
+        body_paras = list(doc.paragraphs)[first + 1:last + 1]
+        if not body_paras:
+            return {"ok": True, "note": "no body paragraphs"}
+        chunks = []  # (para, segments, flat_text)
+        offsets = []  # cumulative char position where each para's text starts
+        running = 0
+        full_parts = []
+        for bp in body_paras:
+            segs = _extract_segments(bp)
+            txt = _segments_text(segs)
+            offsets.append(running)
+            running += len(txt) + 1  # +1 for the implicit paragraph break
+            full_parts.append(txt)
+            chunks.append((bp, segs, txt))
+        joined = '\n'.join(full_parts)
+        cut = _first_junk_position(joined)
+        if cut is None:
+            return {"ok": True, "action": "truncate_junk", "note": "no junk found in body"}
+
+        # Map `cut` back to (chunk_index, local_offset)
+        target = None
+        for idx, (_, _, txt) in enumerate(chunks):
+            start = offsets[idx]
+            end_text = start + len(txt)
+            if cut <= end_text:
+                target = (idx, cut - start)
                 break
-        if cut_at is None:
-            return {"ok": True, "action": "truncate_junk", "note": "no junk found"}
-        _remove_paragraphs(src, cut_at, last)
-        return {"ok": True, "action": "truncate_junk",
-                "paragraphs_removed": last - cut_at + 1,
-                "kept_through_paragraph": cut_at - 1}
+        if target is None:
+            return {"ok": True, "note": "could not map junk position"}
+        tgt_idx, local = target
+        kept_chars = 0
+        kept_body_removed = 0
+
+        # Within target paragraph, keep segments up to `local` characters
+        tgt_para, tgt_segs, tgt_text = chunks[tgt_idx]
+        new_segs = []
+        consumed = 0
+        for kind, s_text, b, i in tgt_segs:
+            if consumed >= local:
+                break
+            if consumed + len(s_text) <= local:
+                new_segs.append((kind, s_text, b, i))
+                consumed += len(s_text)
+            else:
+                remaining = local - consumed
+                if remaining > 0:
+                    new_segs.append((kind, s_text[:remaining], b, i))
+                break
+        # Trim trailing whitespace and dangling breaks from kept segments
+        while new_segs and new_segs[-1][0] == 'break':
+            new_segs.pop()
+        if new_segs and new_segs[-1][0] == 'text':
+            kind, t, b, i = new_segs[-1]
+            new_segs[-1] = (kind, t.rstrip(), b, i)
+
+        if new_segs:
+            _write_segments(tgt_para, new_segs)
+            kept_chars = sum(len(s[1]) for s in new_segs)
+        else:
+            # Nothing kept inside this paragraph → remove it entirely
+            tgt_para._element.getparent().remove(tgt_para._element)
+            kept_body_removed += 1
+
+        # Delete every paragraph after the target
+        for bp, _, _ in chunks[tgt_idx + 1:]:
+            bp._element.getparent().remove(bp._element)
+            kept_body_removed += 1
+
+        doc.save(str(src))
+        return {
+            "ok": True, "action": "truncate_junk",
+            "cut_char": cut, "chars_kept_in_cut_para": kept_chars,
+            "paragraphs_removed_after_cut": kept_body_removed - (0 if new_segs else 1),
+            "cut_paragraph_cleared": not new_segs,
+        }
 
     if action == "replace":
         content = payload.get("content")
@@ -329,30 +483,52 @@ def cmd_repair(job_dir: Path, day: str, action: str, payload: dict) -> dict:
         from docx import Document
         doc = Document(str(src))
         heading_p = doc.paragraphs[first]
-        # Remove current body (keep heading paragraph, replace its text too if needed)
-        for p in list(doc.paragraphs)[first + 1:last + 1]:
-            p._element.getparent().remove(p._element)
-        # Replace heading text if first line looks like a heading
+        body_paras = list(doc.paragraphs)[first + 1:last + 1]
+        # Remember style of the first body paragraph so new body paragraphs match
+        body_style_src = body_paras[0] if body_paras else heading_p
+        # Decide heading handling
         if content and DAY_HEADING_RE.match(content[0]):
-            for r in list(heading_p.runs):
-                r.text = ""
-            heading_p.runs[0].text = content[0] if heading_p.runs else None
-            if not heading_p.runs:
-                heading_p.add_run(content[0])
-            body_lines = content[1:]
+            heading_text = content[0]
+            body_items = content[1:]
         else:
-            body_lines = content
+            heading_text = None
+            body_items = list(content)
+        # Remove current body
+        for p in body_paras:
+            p._element.getparent().remove(p._element)
+        # Replace heading text (parses markdown; ** keeps bold spans)
+        if heading_text is not None:
+            _render_markdown_into(heading_p, heading_text)
+        # Append new body paragraphs with markdown runs + \n → <w:br/>
         anchor = heading_p
-        for line in body_lines:
-            anchor = _append_paragraph_after(anchor, line)
+        for line in body_items:
+            anchor = _append_empty_like(anchor, style_src=body_style_src)
+            _render_markdown_into(anchor, line)
         doc.save(str(src))
-        return {"ok": True, "action": "replace", "paragraphs_written": len(content)}
+        return {"ok": True, "action": "replace",
+                "heading_replaced": heading_text is not None,
+                "body_paragraphs_written": len(body_items)}
 
     return {"error": f"Unknown action: {action}"}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Tool: insert
 # ─────────────────────────────────────────────────────────────────────────────
+
+_OPEN_QUOTES  = '"“‘'
+_CLOSE_QUOTES = '"”’'
+
+def _strip_outer_quotes(s: str) -> str:
+    s = s.strip()
+    if len(s) >= 2 and s[0] in _OPEN_QUOTES and s[-1] in _CLOSE_QUOTES:
+        return s[1:-1].strip()
+    return s
+
+def _space_join(a: str, b: str) -> str:
+    a, b = (a or ''), (b or '')
+    if not a: return b
+    if not b: return a
+    return a.rstrip() + ('' if a[-1].isspace() or b[0].isspace() else ' ') + b.lstrip()
 
 def cmd_insert(job_dir: Path, payload: dict) -> dict:
     src = _require_docx(job_dir)
@@ -369,29 +545,47 @@ def cmd_insert(job_dir: Path, payload: dict) -> dict:
     if nd is None:
         return {"error": f"Bad after_day: {payload['after_day']!r}"}
     month, day_num = nd
-    _, last = _entry_range_in_docx(src, month, day_num)
+    first, last = _entry_range_in_docx(src, month, day_num)
 
     from docx import Document
     doc = Document(str(src))
+    # Steal paragraph styles from the preceding entry so headings use the same
+    # Heading 1 style and body uses the same body style.
+    prev_heading_p = doc.paragraphs[first]
+    prev_body_paras = list(doc.paragraphs)[first + 1:last + 1]
+    prev_body_p = prev_body_paras[0] if prev_body_paras else prev_heading_p
     anchor = doc.paragraphs[last]
-    # Heading
-    anchor = _append_paragraph_after(anchor, payload["heading"], bold=True)
-    # Verse (italic) + reference
-    verse = f'"{payload["verse_text"]}" — {payload["verse_ref"]} (WEB)'
-    anchor = _append_paragraph_after(anchor, verse, italic=True)
-    # Paragraph 1: before bold / bold / after bold → single paragraph with three runs
-    anchor = _append_paragraph_after(anchor, payload["paragraph1_before_bold"])
-    # Add bold + after-bold to the same paragraph
-    anchor.add_run(payload["bold_sentence"]).bold = True
-    anchor.add_run(payload["paragraph1_after_bold"])
-    # Paragraph 2
-    anchor = _append_paragraph_after(anchor, payload["paragraph2"])
-    # Prayer heading
-    anchor = _append_paragraph_after(anchor, "The Prayer of the Day", bold=True)
-    # Prayer sentence
-    _append_paragraph_after(anchor, payload["prayer"])
+
+    # New heading — uses the preceding heading's paragraph style
+    heading_p = _append_empty_like(anchor, style_src=prev_heading_p)
+    _render_markdown_into(heading_p, payload["heading"])
+
+    # Verse: strip any outer quote marks the caller already added, then add one pair.
+    verse_clean = _strip_outer_quotes(payload["verse_text"])
+    verse_line = f'*"{verse_clean}" — {payload["verse_ref"]} (WEB)*'
+
+    # Paragraph 1: join before/bold/after with real spaces (no "but**there")
+    p1 = _space_join(
+            _space_join(payload["paragraph1_before_bold"],
+                        '**' + payload["bold_sentence"].strip() + '**'),
+            payload["paragraph1_after_bold"])
+
+    # Build the body as one paragraph with \n line breaks, matching the common
+    # n8n format. For jobs whose existing bodies are many paragraphs this is
+    # still valid: qc_job treats everything until the next heading as one entry.
+    body_md = "\n".join([
+        verse_line,
+        p1,
+        payload["paragraph2"].strip(),
+        "**The Prayer of the Day**",
+        payload["prayer"].strip(),
+    ])
+    body_p = _append_empty_like(heading_p, style_src=prev_body_p)
+    _render_markdown_into(body_p, body_md)
+
     doc.save(str(src))
-    return {"ok": True, "inserted_after": f"{month} {day_num}", "new_heading": payload["heading"]}
+    return {"ok": True, "inserted_after": f"{month} {day_num}",
+            "new_heading": payload["heading"]}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Tool: rebuild
