@@ -484,21 +484,46 @@ def cmd_repair(job_dir: Path, day: str, action: str, payload: dict) -> dict:
         doc = Document(str(src))
         heading_p = doc.paragraphs[first]
         body_paras = list(doc.paragraphs)[first + 1:last + 1]
-        # Remember style of the first body paragraph so new body paragraphs match
         body_style_src = body_paras[0] if body_paras else heading_p
-        # Decide heading handling
-        if content and DAY_HEADING_RE.match(content[0]):
-            heading_text = content[0]
-            body_items = content[1:]
-        else:
-            heading_text = None
-            body_items = list(content)
+
+        # Detect heading on content[0] AFTER stripping surrounding markdown
+        # (**...**, *...*, whitespace). get_entry returns headings wrapped in
+        # ** because their runs are bold, so callers paste them back verbatim.
+        heading_text = None
+        body_items = list(content)
+        if content:
+            first_clean = re.sub(r'^\s*\*+\s*', '', content[0])
+            first_clean = re.sub(r'\s*\*+\s*$', '', first_clean).strip()
+            if first_clean and DAY_HEADING_RE.match(first_clean):
+                # Safety: refuse to rename this entry to a day that already exists elsewhere
+                m2 = DAY_HEADING_RE.match(first_clean)
+                new_mo, new_dn = m2.group(1), int(m2.group(2))
+                if (new_mo, new_dn) != (month, day_num):
+                    try:
+                        _entry_range_in_docx(src, new_mo, new_dn)
+                        return {"error": f"Would duplicate an existing day: {new_mo} {new_dn}. "
+                                         f"Delete that one first or keep the original heading."}
+                    except RuntimeError:
+                        pass
+                heading_text = first_clean
+                body_items = content[1:]
+
+        # Safety: refuse stray day headings in the body
+        for item in body_items:
+            peek = re.sub(r'^\s*\*+\s*', '', item)
+            peek = re.sub(r'\s*\*+\s*$', '', peek).strip()
+            if DAY_HEADING_RE.match(peek):
+                return {"error": f"Body contains what looks like a day heading: {peek!r}. "
+                                 f"Use only content[0] for the heading."}
+
         # Remove current body
         for p in body_paras:
             p._element.getparent().remove(p._element)
-        # Replace heading text (parses markdown; ** keeps bold spans)
+        # Overwrite the heading paragraph's runs. Wrap in ** so the run is
+        # bold (matches the format get_entry reports for existing headings),
+        # independent of whether the paragraph style already makes it bold.
         if heading_text is not None:
-            _render_markdown_into(heading_p, heading_text)
+            _render_markdown_into(heading_p, f"**{heading_text}**")
         # Append new body paragraphs with markdown runs + \n → <w:br/>
         anchor = heading_p
         for line in body_items:
@@ -547,45 +572,66 @@ def cmd_insert(job_dir: Path, payload: dict) -> dict:
     month, day_num = nd
     first, last = _entry_range_in_docx(src, month, day_num)
 
+    # Safety: refuse to insert a duplicate day
+    m_new = DAY_HEADING_RE.match(payload["heading"])
+    new_month, new_day = m_new.group(1), int(m_new.group(2))
+    try:
+        _entry_range_in_docx(src, new_month, new_day)
+        return {"error": f"Day already exists in this book: {new_month} {new_day}. "
+                         f"Delete or replace it instead of inserting a duplicate."}
+    except RuntimeError:
+        pass  # not found, safe to insert
+
     from docx import Document
     doc = Document(str(src))
-    # Steal paragraph styles from the preceding entry so headings use the same
-    # Heading 1 style and body uses the same body style.
-    prev_heading_p = doc.paragraphs[first]
-    prev_body_paras = list(doc.paragraphs)[first + 1:last + 1]
-    prev_body_p = prev_body_paras[0] if prev_body_paras else prev_heading_p
-    anchor = doc.paragraphs[last]
+    prev_heading_p   = doc.paragraphs[first]
+    prev_body_paras  = list(doc.paragraphs)[first + 1:last + 1]
+    prev_body_p      = prev_body_paras[0] if prev_body_paras else prev_heading_p
+    num_prev_body    = len(prev_body_paras)
+    anchor           = doc.paragraphs[last]
 
-    # New heading — uses the preceding heading's paragraph style
+    # Heading — clone the preceding heading's paragraph style AND wrap in **
+    # so the run itself is bold (get_entry shows existing headings as **…**).
     heading_p = _append_empty_like(anchor, style_src=prev_heading_p)
-    _render_markdown_into(heading_p, payload["heading"])
+    _render_markdown_into(heading_p, f"**{payload['heading']}**")
 
-    # Verse: strip any outer quote marks the caller already added, then add one pair.
+    # Verse: strip any outer quote the caller already added, then add one pair
     verse_clean = _strip_outer_quotes(payload["verse_text"])
-    verse_line = f'*"{verse_clean}" — {payload["verse_ref"]} (WEB)*'
+    verse_line  = f'*"{verse_clean}" — {payload["verse_ref"]} (WEB)*'
 
-    # Paragraph 1: join before/bold/after with real spaces (no "but**there")
+    # Paragraph 1: join before + **bold** + after with real single spaces
     p1 = _space_join(
             _space_join(payload["paragraph1_before_bold"],
                         '**' + payload["bold_sentence"].strip() + '**'),
             payload["paragraph1_after_bold"])
 
-    # Build the body as one paragraph with \n line breaks, matching the common
-    # n8n format. For jobs whose existing bodies are many paragraphs this is
-    # still valid: qc_job treats everything until the next heading as one entry.
-    body_md = "\n".join([
-        verse_line,
-        p1,
-        payload["paragraph2"].strip(),
-        "**The Prayer of the Day**",
-        payload["prayer"].strip(),
-    ])
-    body_p = _append_empty_like(heading_p, style_src=prev_body_p)
-    _render_markdown_into(body_p, body_md)
+    p2         = payload["paragraph2"].strip()
+    prayer     = payload["prayer"].strip()
+    prayer_hdr = "**The Prayer of the Day**"
+
+    # Match the preceding entry's body structure: if it was one paragraph with
+    # inline <w:br/> breaks, emit one paragraph using the book's actual spacing
+    # (leading \n, \n\n between sections, single \n before the prayer sentence).
+    # If it was many separate paragraphs, emit one paragraph per section.
+    if num_prev_body <= 1:
+        body_md = ("\n" + verse_line
+                   + "\n\n" + p1
+                   + "\n\n" + p2
+                   + "\n\n" + prayer_hdr
+                   + "\n" + prayer)
+        body_p = _append_empty_like(heading_p, style_src=prev_body_p)
+        _render_markdown_into(body_p, body_md)
+    else:
+        sections = [verse_line, p1, p2, prayer_hdr, prayer]
+        a = heading_p
+        for s in sections:
+            a = _append_empty_like(a, style_src=prev_body_p)
+            _render_markdown_into(a, s)
 
     doc.save(str(src))
     return {"ok": True, "inserted_after": f"{month} {day_num}",
-            "new_heading": payload["heading"]}
+            "new_heading": payload["heading"],
+            "body_format": "single-paragraph" if num_prev_body <= 1 else "multi-paragraph"}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Tool: rebuild
