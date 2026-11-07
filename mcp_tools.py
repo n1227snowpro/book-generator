@@ -146,13 +146,16 @@ def cmd_qc(job_dir: Path) -> dict:
             expected.append((m, d))
     missing = [f"{m} {d}" for (m, d) in expected if seen.get((m, d), 0) == 0]
     duplicate = [f"{m} {d} (x{c})" for (m, d), c in seen.items() if c > 1]
+    # Order check only makes sense on the manuscript: EPUB spine order is
+    # driven by the TOC, not the calendar, so skip it when reading EPUB.
     order_errors = []
-    last_key = (-1, -1)
-    for e in entries:
-        k = _day_key(e)
-        if k < last_key:
-            order_errors.append(e["heading"])
-        last_key = k
+    if src_kind == "docx":
+        last_key = (-1, -1)
+        for e in entries:
+            k = _day_key(e)
+            if k < last_key:
+                order_errors.append(e["heading"])
+            last_key = k
 
     # --- Junk + prayer duplicates per entry ---
     junk_hits: dict[str, list[str]] = {}

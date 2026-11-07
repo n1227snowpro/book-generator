@@ -21,8 +21,19 @@ function mcp_token(): ?string {
 }
 
 function presented_token(): ?string {
-    $h = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
-    if (stripos($h, 'bearer ') === 0) return trim(substr($h, 7));
+    // Apache often strips Authorization — check every surface it can leak through.
+    $sources = [
+        $_SERVER['HTTP_AUTHORIZATION'] ?? '',
+        $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '',
+    ];
+    if (function_exists('getallheaders')) {
+        foreach (getallheaders() as $k => $v) {
+            if (strcasecmp($k, 'Authorization') === 0) $sources[] = (string)$v;
+        }
+    }
+    foreach ($sources as $h) {
+        if (is_string($h) && stripos($h, 'bearer ') === 0) return trim(substr($h, 7));
+    }
     if (isset($_GET['key']) && is_string($_GET['key']) && $_GET['key'] !== '') return $_GET['key'];
     return null;
 }
