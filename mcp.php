@@ -151,13 +151,19 @@ function tool_generate_book(array $args): array {
     ];
     if ($body['bonus_type'] === 'none') $body['bonus'] = false;
 
-    // POST to our own webhook.php (keeps all its existing logic)
-    $url = base_url() . '/webhook.php';
-    $ch  = curl_init($url);
+    // POST to our own webhook.php (keeps all its existing logic).
+    // Forward X-Webhook-Secret from config.php when set, so webhook.php's
+    // own auth accepts us. The secret is never put into tool output.
+    $url     = base_url() . '/webhook.php';
+    $headers = ['Content-Type: application/json'];
+    if (defined('WEBHOOK_SECRET') && WEBHOOK_SECRET !== '') {
+        $headers[] = 'X-Webhook-Secret: ' . WEBHOOK_SECRET;
+    }
+    $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_POST           => true,
         CURLOPT_POSTFIELDS     => json_encode($body, JSON_UNESCAPED_SLASHES),
-        CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
+        CURLOPT_HTTPHEADER     => $headers,
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT        => 30,
     ]);
@@ -294,6 +300,84 @@ function tool_rebuild_job(array $args): array {
     return json_as_text($res);
 }
 
+function tool_import_source(array $args): array {
+    $job = (string)($args['job_id'] ?? '');
+    $url = (string)($args['manuscript_url'] ?? '');
+    $dir = job_dir($job);
+    if ($dir === null || !is_dir($dir)) return json_as_text(['error' => 'bad or unknown job_id']);
+    if ($url === '' || !preg_match('#^https?://#i', $url))
+        return json_as_text(['error' => 'manuscript_url must be an http(s) URL']);
+
+    $dest = $dir . '/source.docx';
+    if (is_file($dest) && empty($args['overwrite']))
+        return json_as_text(['ok' => true, 'note' => 'source.docx already present; pass overwrite=true to replace',
+                             'editable' => true]);
+
+    $tmp = $dest . '.part';
+    $fh  = fopen($tmp, 'wb');
+    if (!$fh) return json_as_text(['error' => 'cannot write to job dir']);
+    $ch  = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_FILE           => $fh,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_MAXREDIRS      => 5,
+        CURLOPT_CONNECTTIMEOUT => 30,
+        CURLOPT_TIMEOUT        => 300,
+        CURLOPT_FAILONERROR    => true,
+    ]);
+    $ok   = curl_exec($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err  = curl_error($ch);
+    curl_close($ch);
+    fclose($fh);
+    if (!$ok) { @unlink($tmp); return json_as_text(['error' => "download failed (HTTP $code): $err"]); }
+
+    // Sanity check: DOCX is a ZIP, first bytes must be "PK"
+    $head = file_get_contents($tmp, false, null, 0, 4);
+    if ($head === false || substr($head, 0, 2) !== 'PK') {
+        @unlink($tmp);
+        return json_as_text(['error' => 'downloaded file is not a .docx (ZIP header missing)']);
+    }
+    rename($tmp, $dest);
+
+    // Make sure job.json exists so rebuild_job can run. If missing, reconstruct
+    // what we can from status.json + the output filename.
+    $meta_path = $dir . '/job.json';
+    if (!is_file($meta_path)) {
+        $status = read_status($dir);
+        $title  = null; $suffix_pdf = '_paperback.pdf';
+        $out_dir = $dir . '/output';
+        if (is_dir($out_dir)) {
+            foreach (scandir($out_dir) as $f) {
+                if (str_ends_with($f, $suffix_pdf)) {
+                    $title = str_replace('_', ' ', substr($f, 0, -strlen($suffix_pdf)));
+                    break;
+                }
+            }
+        }
+        file_put_contents($meta_path, json_encode([
+            'project_id'   => $status['project_id'] ?? substr($job, 3, 36),
+            'title'        => $title ?? $job,
+            'subtitle'     => '',
+            'author'       => (string)($args['author'] ?? 'Author'),
+            'book_url'     => $url,
+            'bonus_type'   => (string)($args['bonus_type'] ?? 'prayer'),
+            'include_toc'  => (bool)($args['include_toc'] ?? false),
+            'para_spacing' => isset($args['para_spacing']) ? (int)$args['para_spacing'] : 14,
+            'created_at'   => gmdate('c'),
+            'reconstructed'=> true,
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+    }
+
+    return json_as_text([
+        'ok' => true,
+        'job_id' => $job,
+        'editable' => true,
+        'size_bytes' => filesize($dest),
+        'job_json_reconstructed' => !is_file($meta_path) ? false : (json_decode(file_get_contents($meta_path), true)['reconstructed'] ?? false),
+    ]);
+}
+
 function tool_notify_app(array $args): array {
     $job = (string)($args['job_id'] ?? '');
     $pid = (string)($args['project_id'] ?? '');
@@ -374,6 +458,16 @@ $TOOLS = [
                      'paragraph2','prayer']]],
   ['name' => 'rebuild_job', 'description' => 'Rebuild PDF + EPUB from the (possibly edited) source.docx using the job\'s original settings. Keeps the same job_id and URLs.',
    'inputSchema' => ['type' => 'object', 'properties' => ['job_id' => ['type' => 'string']], 'required' => ['job_id']]],
+  ['name' => 'import_source', 'description' => 'For an existing job that has no source.docx (older jobs), download the manuscript from manuscript_url, store it as the job\'s source.docx, and mark the job editable. Optional fields (author, bonus_type, include_toc, para_spacing) only matter when the job also has no job.json and must be reconstructed. Pass overwrite=true to replace an existing source.docx.',
+   'inputSchema' => ['type' => 'object', 'properties' => [
+      'job_id'         => ['type' => 'string'],
+      'manuscript_url' => ['type' => 'string'],
+      'overwrite'      => ['type' => 'boolean', 'default' => false],
+      'author'         => ['type' => 'string'],
+      'bonus_type'     => ['type' => 'string', 'enum' => ['prayer','affirmation','none']],
+      'include_toc'    => ['type' => 'boolean'],
+      'para_spacing'   => ['type' => 'integer'],
+   ], 'required' => ['job_id', 'manuscript_url']]],
   ['name' => 'notify_app', 'description' => 'POST the job\'s download URLs to the Supabase book-callback (the same payload n8n sends).',
    'inputSchema' => ['type' => 'object', 'properties' => [
       'job_id' => ['type' => 'string'], 'project_id' => ['type' => 'string'],
@@ -390,6 +484,7 @@ function dispatch_tool(string $name, array $args): array {
         case 'repair_entry':  return tool_repair_entry($args);
         case 'insert_entry':  return tool_insert_entry($args);
         case 'rebuild_job':   return tool_rebuild_job($args);
+        case 'import_source': return tool_import_source($args);
         case 'notify_app':    return tool_notify_app($args);
     }
     return json_as_text(['error' => "unknown tool: $name"]);
