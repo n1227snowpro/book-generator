@@ -1247,12 +1247,12 @@ def build_epub(
             f'</a></li>\n'
         )
     toc_body = _wrap(
-        '    <div class="epub-toc-title-card"><h2>Table Of Content</h2></div>\n'
+        '    <div class="epub-toc-title-card"><h2>Table of Contents</h2></div>\n'
         '    <nav id="toc" epub:type="toc">\n'
         f'      <ol class="toc-block">\n{toc_items}      </ol>\n'
         '    </nav>'
     )
-    toc_html = _xhtml_page("Table Of Content", toc_body)
+    toc_html = _xhtml_page("Table of Contents", toc_body)
 
     # ── OPF ──────────────────────────────────────────────────────────────────
     # Order: title → copyright → bonus → toc → chapters
@@ -1365,7 +1365,7 @@ def build_epub(
     # TOC as a readable navpoint
     nav_pts += (
         f'    <navPoint id="np_toc" playOrder="{order}">\n'
-        '      <navLabel><text>Table Of Content</text></navLabel>\n'
+        '      <navLabel><text>Table of Contents</text></navLabel>\n'
         '      <content src="toc.xhtml"/>\n'
         '    </navPoint>\n'
     )
